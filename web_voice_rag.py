@@ -106,11 +106,6 @@ class WebVoiceRAG:
                 "api_base": llm_api_base,
                 "api_key": llm_api_key,
                 "model_name": model_name
-            },
-            "deepseek": {
-                "api_base": "https://api.deepseek.com",
-                "api_key": "sk-2c57fe7aa3224eeaa64d54a64555d5da",
-                "model_name": "deepseek-chat"
             }
         }
         self.current_model_type = "local" # 默认使用本地模型
