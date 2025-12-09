@@ -23,7 +23,7 @@ python asr/FunASR/runtime/python/websocket/funasr_wss_server.py \
 
 3. 启动rag
 conda activate /data/AI/LlamaCPPProject/env
-cd /data/AI/LlamaCPPProject/application
+cd ~/school_project/ASRAG
 python web_voice_rag.py
 
 4. 在浏览器中打开 http://xx:5000

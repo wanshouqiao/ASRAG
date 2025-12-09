@@ -24,7 +24,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Flask 应用
-app = Flask(__name__)
+# Flask 应用（显式指定模板与静态目录，避免因包目录变化找不到模板）
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.dirname(APP_DIR)
+TEMPLATE_DIR = os.path.join(ROOT_DIR, "templates")
+STATIC_DIR = os.path.join(ROOT_DIR, "static")
+app = Flask(__name__, template_folder=TEMPLATE_DIR, static_folder=STATIC_DIR)
 
 
 @app.after_request
@@ -187,9 +192,43 @@ def text_chat():
     start_time = time.time()
     timings = {}
     try:
-        data = request.get_json()
-        text = data.get("text", "").strip()
-        audio_id = data.get("audio_id")
+        text = ""
+        audio_id = None
+        image_path = None
+
+        # 兼容 form-data（携带图片）与 JSON
+        if request.content_type and "multipart/form-data" in request.content_type:
+            text = request.form.get("text", "").strip()
+            audio_id = request.form.get("audio_id")
+            image_file = request.files.get("image")
+
+            if image_file and image_file.filename:
+                import uuid
+
+                # 基础校验
+                allowed_ext = {"jpg", "jpeg", "png", "webp"}
+                _, ext = os.path.splitext(image_file.filename)
+                ext = ext.lower().lstrip(".")
+                if ext not in allowed_ext:
+                    return jsonify({"error": "仅支持 jpg/jpeg/png/webp 图片"}), 400
+
+                image_bytes = image_file.read()
+                max_size = 2 * 1024 * 1024  # 2MB
+                if len(image_bytes) > max_size:
+                    return jsonify({"error": "图片大小超出 2MB 限制"}), 400
+
+                os.makedirs(UPLOAD_DIR, exist_ok=True)
+                filename = f"image_{int(time.time())}_{uuid.uuid4().hex[:8]}.{ext}"
+                save_path = os.path.join(UPLOAD_DIR, filename)
+                with open(save_path, "wb") as f:
+                    f.write(image_bytes)
+                image_path = save_path
+                print(f"[image-upload] saved to {image_path}")
+        else:
+            data = request.get_json() or {}
+            text = data.get("text", "").strip()
+            audio_id = data.get("audio_id")
+
         if not text:
             return jsonify({"error": "输入文本不能为空"}), 400
         t0 = time.time()

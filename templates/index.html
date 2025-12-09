@@ -220,6 +220,38 @@
         .hidden {
             display: none;
         }
+
+        .image-preview {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-top: 8px;
+            background: #f8f9fa;
+            border: 1px dashed #ddd;
+            padding: 10px;
+            border-radius: 8px;
+        }
+
+        .image-preview img {
+            width: 60px;
+            height: 60px;
+            object-fit: cover;
+            border-radius: 6px;
+            border: 1px solid #eee;
+        }
+
+        .image-preview .meta {
+            flex: 1;
+            color: #555;
+            font-size: 0.9em;
+        }
+
+        .image-preview button {
+            padding: 6px 10px;
+            font-size: 12px;
+            background: #ff7043;
+            color: white;
+        }
     </style>
 </head>
 <body>
@@ -252,9 +284,19 @@
             </div>
         </div>
 
-        <div class="result-section" style="margin-top:15px; display: flex; gap: 10px;">
+        <div class="result-section" style="margin-top:15px; display: flex; gap: 10px; align-items: center;">
             <input type="text" id="textInput" placeholder="或者在这里输入文字提问..." style="flex: 1; padding: 10px; border-radius: 5px; border: 1px solid #ddd;">
+            <input type="file" id="imageInput" accept="image/png,image/jpeg,image/webp" class="hidden">
+            <button id="btnImage" class="btn-record" style="padding: 10px 14px; white-space: nowrap;">📷 上传图片</button>
             <button id="btnSend" class="btn-record" style="padding: 10px 20px;">发送</button>
+        </div>
+        <div id="imagePreview" class="image-preview hidden">
+            <img id="imageThumb" alt="预览">
+            <div class="meta">
+                <div id="imageName"></div>
+                <div id="imageSize" style="color:#888;"></div>
+            </div>
+            <button id="btnClearImage" class="btn-clear" style="background:#ff7043;color:#fff;">移除</button>
         </div>
 
         <div class="result-section" style="margin-top:15px;">
@@ -338,9 +380,17 @@
         const modelStatus = document.getElementById('modelStatus');
         const textInput = document.getElementById('textInput');
         const btnSend = document.getElementById('btnSend');
+        const btnImage = document.getElementById('btnImage');
+        const imageInput = document.getElementById('imageInput');
+        const imagePreview = document.getElementById('imagePreview');
+        const imageThumb = document.getElementById('imageThumb');
+        const imageName = document.getElementById('imageName');
+        const imageSize = document.getElementById('imageSize');
+        const btnClearImage = document.getElementById('btnClearImage');
         const recognitionResult = document.getElementById('recognitionResult');
         let recognizedTextDiv = document.getElementById('recognizedText');
         const recognitionMeta = document.getElementById('recognitionMeta');
+        const MAX_IMAGE_SIZE = 2 * 1024 * 1024; // 2MB 限制
 
         // 加载当前模型设置
         async function loadModelSettings() {
@@ -509,26 +559,100 @@
         loadFiles();
         loadHotwords();
 
+        // 图片选择/预览
+        btnImage.addEventListener('click', () => imageInput.click());
+
+        imageInput.addEventListener('change', () => {
+            const file = imageInput.files && imageInput.files[0];
+            if (!file) {
+                clearImageSelection();
+                return;
+            }
+
+            const allowed = ['image/jpeg', 'image/png', 'image/webp'];
+            const extOk = allowed.includes(file.type) || /\.(jpg|jpeg|png|webp)$/i.test(file.name);
+            if (!extOk) {
+                showError('仅支持 jpg/jpeg/png/webp 图片');
+                clearImageSelection();
+                return;
+            }
+            if (file.size > MAX_IMAGE_SIZE) {
+                showError('图片大小超出 2MB 限制');
+                clearImageSelection();
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                imageThumb.src = e.target.result;
+                imageName.textContent = file.name;
+                imageSize.textContent = `${(file.size / 1024).toFixed(1)} KB`;
+                imagePreview.classList.remove('hidden');
+            };
+            reader.readAsDataURL(file);
+        });
+
+        btnClearImage.addEventListener('click', () => {
+            clearImageSelection();
+        });
+
+        function clearImageSelection() {
+            imageInput.value = '';
+            imageThumb.src = '';
+            imageName.textContent = '';
+            imageSize.textContent = '';
+            imagePreview.classList.add('hidden');
+        }
+
         // 发送文本
         async function sendText() {
             const text = textInput.value.trim();
             if (!text) return;
+            const imageFile = imageInput.files && imageInput.files[0];
+
+            if (imageFile) {
+                const allowed = ['image/jpeg', 'image/png', 'image/webp'];
+                const extOk = allowed.includes(imageFile.type) || /\.(jpg|jpeg|png|webp)$/i.test(imageFile.name);
+                if (!extOk) {
+                    showError('仅支持 jpg/jpeg/png/webp 图片');
+                    return;
+                }
+                if (imageFile.size > MAX_IMAGE_SIZE) {
+                    showError('图片大小超出 2MB 限制');
+                    return;
+                }
+            }
 
             try {
                 updateUI('processing');
                 textInput.disabled = true;
                 btnSend.disabled = true;
+                btnImage.disabled = true;
 
-                const response = await fetch('/api/text_chat', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ 
-                        text: text,
-                        audio_id: lastAudioId  // 传递 audio_id
-                    })
-                });
+                let response;
+                if (imageFile) {
+                    const formData = new FormData();
+                    formData.append('text', text);
+                    if (lastAudioId) {
+                        formData.append('audio_id', lastAudioId);
+                    }
+                    formData.append('image', imageFile);
+                    response = await fetch('/api/text_chat', {
+                        method: 'POST',
+                        body: formData
+                    });
+                } else {
+                    response = await fetch('/api/text_chat', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ 
+                            text: text,
+                            audio_id: lastAudioId  // 传递 audio_id
+                        })
+                    });
+                }
 
                 const data = await response.json();
 
@@ -548,6 +672,7 @@
                     textInput.value = ''; // 清空输入框
                     lastAudioId = null; // 重置 audio_id
                     recognitionResult.style.display = 'none'; // 隐藏识别结果区域
+                    clearImageSelection();
                 } else {
                     showError(data.error || '处理失败，请重试');
                 }
@@ -558,6 +683,7 @@
                 updateUI('idle');
                 textInput.disabled = false;
                 btnSend.disabled = false;
+                btnImage.disabled = false;
                 textInput.focus();
             }
         }
