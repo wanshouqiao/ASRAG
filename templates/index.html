@@ -1,0 +1,1094 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>语音 RAG 问答系统</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 900px;
+            width: 100%;
+            padding: 40px;
+        }
+
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 2em;
+        }
+
+        .subtitle {
+            text-align: center;
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 0.9em;
+        }
+
+        .status {
+            text-align: center;
+            padding: 10px;
+            margin-bottom: 20px;
+            border-radius: 10px;
+            font-weight: 500;
+        }
+
+        .status.idle {
+            background: #e3f2fd;
+            color: #1976d2;
+        }
+
+        .status.recording {
+            background: #ffebee;
+            color: #c62828;
+            animation: pulse 1.5s infinite;
+        }
+
+        .status.processing {
+            background: #fff3e0;
+            color: #e65100;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+
+        .controls {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+
+        button {
+            padding: 15px 30px;
+            font-size: 16px;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-weight: 600;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .btn-record {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+        }
+
+        .btn-stop {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            color: white;
+        }
+
+        .btn-clear {
+            background: #e0e0e0;
+            color: #333;
+        }
+
+        .results {
+            margin-top: 30px;
+        }
+
+        .result-section {
+            margin-bottom: 25px;
+            padding: 20px;
+            border-radius: 10px;
+            background: #f5f5f5;
+        }
+
+        .result-section h3 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 1.1em;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .result-section h3::before {
+            content: "📝";
+            font-size: 1.2em;
+        }
+
+        .result-section.answer h3::before {
+            content: "🤖";
+        }
+
+        .result-text {
+            color: #555;
+            line-height: 1.8;
+            font-size: 15px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .result-section.answer {
+            background: linear-gradient(135deg, #e0f7fa 0%, #b2ebf2 100%);
+        }
+
+        .error {
+            background: #ffebee;
+            color: #c62828;
+            padding: 15px;
+            border-radius: 10px;
+            margin-top: 20px;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+        }
+
+        .loading::after {
+            content: "...";
+            animation: dots 1.5s steps(4, end) infinite;
+        }
+
+        @keyframes dots {
+            0%, 20% { content: "."; }
+            40% { content: ".."; }
+            60%, 100% { content: "..."; }
+        }
+
+        .waveform {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 60px;
+            margin: 20px 0;
+            gap: 4px;
+        }
+
+        .waveform-bar {
+            width: 4px;
+            background: #667eea;
+            border-radius: 2px;
+            animation: wave 1s ease-in-out infinite;
+        }
+
+        .waveform-bar:nth-child(1) { animation-delay: 0s; height: 20px; }
+        .waveform-bar:nth-child(2) { animation-delay: 0.1s; height: 35px; }
+        .waveform-bar:nth-child(3) { animation-delay: 0.2s; height: 50px; }
+        .waveform-bar:nth-child(4) { animation-delay: 0.3s; height: 40px; }
+        .waveform-bar:nth-child(5) { animation-delay: 0.4s; height: 30px; }
+        .waveform-bar:nth-child(6) { animation-delay: 0.5s; height: 45px; }
+        .waveform-bar:nth-child(7) { animation-delay: 0.6s; height: 25px; }
+        .waveform-bar:nth-child(8) { animation-delay: 0.7s; height: 40px; }
+
+        @keyframes wave {
+            0%, 100% { transform: scaleY(0.5); }
+            50% { transform: scaleY(1); }
+        }
+
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎤 语音 RAG 问答系统</h1>
+        <p class="subtitle">点击录音按钮，说出您的问题，AI 将基于知识库为您解答</p>
+
+        <div id="status" class="status idle">准备就绪</div>
+
+        <div class="controls">
+            <button id="btnRecord" class="btn-record">🎤 开始录音</button>
+            <button id="btnStop" class="btn-stop" disabled>⏹️ 停止录音</button>
+            <button id="btnClear" class="btn-clear">🗑️ 清空记录</button>
+        </div>
+
+        <!-- 语音识别结果区域 -->
+        <div id="recognitionResult" class="result-section" style="margin-top:15px; display: none;">
+            <h3>识别结果</h3>
+            <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; position: relative;">
+                <div id="recognizedText" style="font-size: 1.1em; line-height: 1.6; margin-bottom: 10px; min-height: 30px;"></div>
+                <div id="recognitionMeta" style="font-size: 0.85em; color: #666; margin-bottom: 10px;"></div>
+                <div style="display: flex; gap: 10px; margin-top: 10px;">
+                    <button id="btnCorrect" class="btn-record" style="padding: 8px 16px; font-size: 0.9em;">
+                        ✏️ 识别有误，点击纠错
+                    </button>
+                    <button id="btnAccept" class="btn-record" style="padding: 8px 16px; font-size: 0.9em; background: #4CAF50;">
+                        ✓ 识别正确
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="result-section" style="margin-top:15px; display: flex; gap: 10px;">
+            <input type="text" id="textInput" placeholder="或者在这里输入文字提问..." style="flex: 1; padding: 10px; border-radius: 5px; border: 1px solid #ddd;">
+            <button id="btnSend" class="btn-record" style="padding: 10px 20px;">发送</button>
+        </div>
+
+        <div class="result-section" style="margin-top:15px;">
+            <h3>模型设置</h3>
+            <div style="margin-top:10px; display: flex; align-items: center; gap: 10px;">
+                <label for="modelSelect">选择 LLM 模型：</label>
+                <select id="modelSelect" style="padding: 8px; border-radius: 5px; border: 1px solid #ddd;">
+                    <option value="local">本地模型 (Qwen2.5-7B)</option>
+                    <option value="deepseek">DeepSeek API</option>
+                </select>
+                <span id="modelStatus" style="font-size: 0.9em; color: #666;"></span>
+            </div>
+            
+            <div style="margin-top: 10px;">
+                <details>
+                    <summary style="cursor: pointer; color: #555; font-size: 0.9em; user-select: none;">⚙️ ASR 热词配置</summary>
+                    <div style="margin-top: 10px;">
+                        <textarea id="hotwordsInput" rows="3" placeholder="请输入热词，每行一个&#10;例如：&#10;阿里巴巴&#10;达摩院" style="width: 100%; padding: 8px; border-radius: 4px; border: 1px solid #ccc; font-family: monospace; font-size: 0.9em;"></textarea>
+                        <div style="font-size: 0.8em; color: #888; margin-top: 5px;">提示：请输入需要重点识别的词汇，每行一个。</div>
+                    </div>
+                </details>
+            </div>
+        </div>
+
+        <div class="result-section" style="margin-top:15px;">
+            <h3>知识库文件管理</h3>
+            <div style="margin-top:10px; margin-bottom:15px;">
+                <input type="file" id="fileInput" accept=".txt,.md,.pdf" style="margin-right:10px;"/>
+                <button id="btnUpload" class="btn-record" style="padding: 8px 15px; font-size: 14px;">上传并添加到知识库</button>
+                <div id="uploadStatus" class="result-text" style="margin-top:5px; font-size: 0.9em;"></div>
+            </div>
+            
+            <div style="border-top: 1px solid #eee; padding-top: 10px;">
+                <h4>当前知识库文件列表：</h4>
+                <div id="fileList" style="margin-top: 10px; max-height: 200px; overflow-y: auto;">
+                    <div style="color: #999; font-style: italic;">正在加载...</div>
+                </div>
+            </div>
+        </div>
+
+        <div id="waveform" class="waveform hidden">
+            <div class="waveform-bar"></div>
+            <div class="waveform-bar"></div>
+            <div class="waveform-bar"></div>
+            <div class="waveform-bar"></div>
+            <div class="waveform-bar"></div>
+            <div class="waveform-bar"></div>
+            <div class="waveform-bar"></div>
+            <div class="waveform-bar"></div>
+        </div>
+
+        <div class="results">
+            <div id="results"></div>
+        </div>
+    </div>
+
+    <script>
+        let mediaRecorder = null;
+        let audioChunks = [];
+        let isRecording = false;
+        let stream = null;
+        let lastAsrTime = 0; // 存储最后一次 ASR 耗时
+        let lastAudioId = null; // 存储最后一次识别的 audio_id
+        let lastRecognizedText = ''; // 存储最后一次识别的文本
+        let lastConfidence = 0; // 存储最后一次识别的置信度
+        let lastAudioBase64 = null; // 存储最后一次录音的 base64 数据（延迟保存）
+
+        const btnRecord = document.getElementById('btnRecord');
+        const btnStop = document.getElementById('btnStop');
+        const btnClear = document.getElementById('btnClear');
+        const btnUpload = document.getElementById('btnUpload');
+        const btnCorrect = document.getElementById('btnCorrect');
+        const btnAccept = document.getElementById('btnAccept');
+        const fileInput = document.getElementById('fileInput');
+        const uploadStatus = document.getElementById('uploadStatus');
+        const status = document.getElementById('status');
+        const results = document.getElementById('results');
+        const waveform = document.getElementById('waveform');
+        const fileList = document.getElementById('fileList');
+        const modelSelect = document.getElementById('modelSelect');
+        const modelStatus = document.getElementById('modelStatus');
+        const textInput = document.getElementById('textInput');
+        const btnSend = document.getElementById('btnSend');
+        const recognitionResult = document.getElementById('recognitionResult');
+        let recognizedTextDiv = document.getElementById('recognizedText');
+        const recognitionMeta = document.getElementById('recognitionMeta');
+
+        // 加载当前模型设置
+        async function loadModelSettings() {
+            try {
+                const response = await fetch('/api/model');
+                const data = await response.json();
+                if (data.success) {
+                    modelSelect.value = data.current_model;
+                }
+            } catch (error) {
+                console.error('加载模型设置失败:', error);
+            }
+        }
+
+        // 切换模型
+        modelSelect.addEventListener('change', async () => {
+            const modelType = modelSelect.value;
+            modelStatus.textContent = '正在切换...';
+            modelSelect.disabled = true;
+            
+            try {
+                const response = await fetch('/api/model', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ model_type: modelType })
+                });
+                
+                const data = await response.json();
+                if (data.success) {
+                    modelStatus.textContent = '✅ 已切换';
+                    setTimeout(() => { modelStatus.textContent = ''; }, 2000);
+                } else {
+                    modelStatus.textContent = '❌ 切换失败';
+                    alert('切换失败: ' + data.error);
+                    // 恢复原来的选择
+                    loadModelSettings();
+                }
+            } catch (error) {
+                console.error('切换模型失败:', error);
+                modelStatus.textContent = '❌ 出错';
+                loadModelSettings();
+            } finally {
+                modelSelect.disabled = false;
+            }
+        });
+
+        // 页面加载时初始化
+        loadFiles();
+        loadModelSettings();
+
+        // 加载文件列表
+        async function loadFiles() {
+            try {
+                const response = await fetch('/api/files');
+                const data = await response.json();
+                
+                if (data.success) {
+                    renderFileList(data.files);
+                } else {
+                    fileList.innerHTML = '<div style="color: red;">加载失败</div>';
+                }
+            } catch (error) {
+                console.error('加载文件列表失败:', error);
+                fileList.innerHTML = '<div style="color: red;">加载出错</div>';
+            }
+        }
+
+        // 渲染文件列表
+        function renderFileList(files) {
+            if (!files || files.length === 0) {
+                fileList.innerHTML = '<div style="color: #999;">暂无文件</div>';
+                return;
+            }
+
+            let html = '<ul style="list-style: none; padding: 0;">';
+            files.forEach(file => {
+                const date = new Date(file.mtime * 1000).toLocaleString();
+                const size = (file.size / 1024).toFixed(1) + ' KB';
+                html += `
+                    <li style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #f0f0f0;">
+                        <div>
+                            <div style="font-weight: 500; color: #333;">${file.name}</div>
+                            <div style="font-size: 0.8em; color: #999;">${date} · ${size}</div>
+                        </div>
+                        <button onclick="deleteFile('${file.name}')" style="padding: 5px 10px; font-size: 12px; background: #ff5252; color: white; border: none; border-radius: 5px; cursor: pointer;">删除</button>
+                    </li>
+                `;
+            });
+            html += '</ul>';
+            fileList.innerHTML = html;
+        }
+
+        // 删除文件
+        window.deleteFile = async function(filename) {
+            if (!confirm(`确定要删除文件 "${filename}" 吗？这将重建知识库，可能需要一点时间。`)) {
+                return;
+            }
+
+            try {
+                // 显示加载状态
+                const btn = event.target;
+                const originalText = btn.textContent;
+                btn.textContent = '删除中...';
+                btn.disabled = true;
+
+                const response = await fetch('/api/files', {
+                    method: 'DELETE',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ filename: filename })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    // 重新加载列表
+                    await loadFiles();
+                    showError('文件已删除，知识库已更新'); // 借用 showError 显示提示，虽然它是红色的
+                } else {
+                    alert('删除失败: ' + (data.error || '未知错误'));
+                    btn.textContent = originalText;
+                    btn.disabled = false;
+                }
+            } catch (error) {
+                console.error('删除文件失败:', error);
+                alert('删除出错: ' + error.message);
+            }
+        };
+
+        // 加载热词配置
+        async function loadHotwords() {
+            try {
+                const response = await fetch('/api/hotwords');
+                const data = await response.json();
+                if (data.hotwords) {
+                    document.getElementById('hotwordsInput').value = data.hotwords;
+                }
+            } catch (error) {
+                console.error('加载热词失败:', error);
+            }
+        }
+
+        // 保存热词配置
+        async function saveHotwords() {
+            const hotwords = document.getElementById('hotwordsInput').value;
+            try {
+                await fetch('/api/hotwords', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ hotwords: hotwords })
+                });
+            } catch (error) {
+                console.error('保存热词失败:', error);
+            }
+        }
+
+        // 监听热词输入框变化
+        document.getElementById('hotwordsInput').addEventListener('blur', saveHotwords);
+
+        // 页面加载时获取文件列表
+        loadFiles();
+        loadHotwords();
+
+        // 发送文本
+        async function sendText() {
+            const text = textInput.value.trim();
+            if (!text) return;
+
+            try {
+                updateUI('processing');
+                textInput.disabled = true;
+                btnSend.disabled = true;
+
+                const response = await fetch('/api/text_chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ 
+                        text: text,
+                        audio_id: lastAudioId  // 传递 audio_id
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    // 合并 ASR 耗时（如果有）
+                    const timings = data.timings || {};
+                    if (lastAsrTime > 0) {
+                        timings.asr_time = lastAsrTime;
+                        // 重新计算总耗时（近似）
+                        if (timings.total_time) {
+                            timings.total_time += lastAsrTime;
+                        }
+                        lastAsrTime = 0; // 重置
+                    }
+                    
+                    displayResult(data.recognized_text, data.answer, data.audio, timings, data.sources, data.audio_id);
+                    textInput.value = ''; // 清空输入框
+                    lastAudioId = null; // 重置 audio_id
+                    recognitionResult.style.display = 'none'; // 隐藏识别结果区域
+                } else {
+                    showError(data.error || '处理失败，请重试');
+                }
+            } catch (error) {
+                console.error('发送文本失败:', error);
+                showError('发送文本时出错: ' + error.message);
+            } finally {
+                updateUI('idle');
+                textInput.disabled = false;
+                btnSend.disabled = false;
+                textInput.focus();
+            }
+        }
+
+        btnSend.addEventListener('click', sendText);
+        textInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                sendText();
+            }
+        });
+
+        // 状态变量
+        let isEditing = false;
+
+        // 进入编辑模式
+        function enterEditMode() {
+            if (isEditing) return;
+            isEditing = true;
+
+            // 转换为可编辑的textarea
+            const textarea = document.createElement('textarea');
+            textarea.value = lastRecognizedText;
+            textarea.style.width = '100%';
+            textarea.style.minHeight = '80px';
+            textarea.style.padding = '10px';
+            textarea.style.fontSize = '1.1em';
+            textarea.style.border = '2px solid #FF9800';
+            textarea.style.borderRadius = '5px';
+            textarea.style.fontFamily = 'inherit';
+            textarea.style.resize = 'vertical';
+            textarea.id = 'correctionTextarea';
+            
+            recognizedTextDiv.replaceWith(textarea);
+            textarea.focus();
+            textarea.select();
+            
+            // 更新按钮
+            btnCorrect.textContent = '✓ 提交修正';
+            btnCorrect.style.background = '#4CAF50';
+            btnCorrect.onclick = submitCorrection;
+            
+            btnAccept.textContent = '✗ 取消';
+            btnAccept.style.background = '#f44336';
+            btnAccept.onclick = cancelEdit;
+        }
+
+        // 提交纠错
+        async function submitCorrection() {
+            const textarea = document.getElementById('correctionTextarea');
+            if (!textarea) return;
+
+            const correctedText = textarea.value.trim();
+            
+            if (!correctedText) {
+                alert('修正文本不能为空');
+                return;
+            }
+            
+            if (correctedText === lastRecognizedText) {
+                cancelEdit();
+                return;
+            }
+            
+            try {
+                // 保存识别数据（带纠错文本）
+                await saveRecognitionData(lastRecognizedText, correctedText);
+                
+                // 更新输入框为修正后的文本
+                textInput.value = correctedText;
+                
+                // 隐藏识别结果区域
+                recognitionResult.style.display = 'none';
+                
+                // 聚焦到输入框
+                textInput.focus();
+
+                // 恢复界面状态
+                resetInterface(correctedText);
+                
+            } catch (error) {
+                console.error('提交纠错失败:', error);
+                alert('提交失败，请稍后重试');
+            }
+        }
+
+        // 取消编辑
+        function cancelEdit() {
+            resetInterface(lastRecognizedText);
+        }
+
+        // 恢复界面状态
+        function resetInterface(textToShow) {
+            const textarea = document.getElementById('correctionTextarea');
+            const textDiv = document.createElement('div');
+            textDiv.id = 'recognizedText';
+            textDiv.style.cssText = 'font-size: 1.1em; line-height: 1.6; margin-bottom: 10px; min-height: 30px;';
+            textDiv.textContent = textToShow;
+            
+            if (textarea) {
+                textarea.replaceWith(textDiv);
+            } else if (recognizedTextDiv && recognizedTextDiv.parentNode) {
+                recognizedTextDiv.replaceWith(textDiv);
+            }
+            
+            recognizedTextDiv = textDiv; // 更新引用
+            isEditing = false;
+            
+            // 恢复按钮
+            btnCorrect.textContent = '✏️ 识别有误，点击纠错';
+            btnCorrect.style.background = '';
+            btnCorrect.onclick = enterEditMode;
+            
+            btnAccept.textContent = '✓ 识别正确';
+            btnAccept.style.background = '#4CAF50';
+            btnAccept.onclick = acceptRecognition;
+        }
+
+        // 保存识别数据到后端
+        async function saveRecognitionData(recognizedText, correctedText = null) {
+            try {
+                const response = await fetch('/api/save_recognition', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        audio_base64: lastAudioBase64,
+                        recognized_text: recognizedText,
+                        corrected_text: correctedText,
+                        confidence: lastConfidence
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    console.log('识别数据已保存:', data.audio_id);
+                    lastAudioId = data.audio_id; // 更新为真实的 audio_id
+                } else {
+                    console.error('保存识别数据失败:', data.error);
+                }
+            } catch (error) {
+                console.error('保存识别数据时出错:', error);
+            }
+        }
+        
+        // 接受识别结果
+        async function acceptRecognition() {
+            // 保存识别数据（识别正确，无纠错）
+            await saveRecognitionData(lastRecognizedText, null);
+            
+            // 隐藏识别结果区域
+            recognitionResult.style.display = 'none';
+            // 聚焦到输入框
+            textInput.focus();
+        }
+        
+        // 初始绑定
+        btnCorrect.onclick = enterEditMode;
+        btnAccept.onclick = acceptRecognition;
+
+        // 开始录音
+        btnRecord.addEventListener('click', async () => {
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaRecorder = new MediaRecorder(stream, {
+                    mimeType: 'audio/webm;codecs=opus'
+                });
+
+                audioChunks = [];
+
+                mediaRecorder.ondataavailable = (event) => {
+                    if (event.data.size > 0) {
+                        audioChunks.push(event.data);
+                    }
+                };
+
+                mediaRecorder.onstop = async () => {
+                    await processAudio();
+                };
+
+                mediaRecorder.start();
+                isRecording = true;
+                updateUI('recording');
+                
+            } catch (error) {
+                console.error('无法访问麦克风:', error);
+                showError('无法访问麦克风，请检查权限设置');
+            }
+        });
+
+        // 停止录音
+        btnStop.addEventListener('click', () => {
+            if (mediaRecorder && isRecording) {
+                mediaRecorder.stop();
+                isRecording = false;
+                
+                // 停止所有音频轨道
+                if (stream) {
+                    stream.getTracks().forEach(track => track.stop());
+                }
+                
+                updateUI('processing');
+            }
+        });
+
+        // 清空记录
+        btnClear.addEventListener('click', () => {
+            results.innerHTML = '';
+            lastAudioId = null; // 清空历史记录时也重置 audio_id
+            recognitionResult.style.display = 'none'; // 隐藏识别结果区域
+        });
+
+        // 上传知识库文件
+        btnUpload.addEventListener('click', async () => {
+            if (!fileInput.files || fileInput.files.length === 0) {
+                showError('请先选择要上传的文件');
+                return;
+            }
+            const file = fileInput.files[0];
+            const formData = new FormData();
+            formData.append('file', file);
+            uploadStatus.textContent = '正在上传并向量化...';
+
+            try {
+                const resp = await fetch('/api/upload_kb', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    uploadStatus.textContent = `上传成功：${file.name}。已添加到知识库。`;
+                    loadFiles(); // 刷新列表
+                } else {
+                    uploadStatus.textContent = `上传失败：${data.error || '未知错误'}`;
+                }
+            } catch (e) {
+                uploadStatus.textContent = `上传失败：${e.message}`;
+            }
+        });
+
+        // 获取热词配置
+        function getHotwords() {
+            const input = document.getElementById('hotwordsInput').value.trim();
+            if (!input) return '';
+            
+            const lines = input.split('\n');
+            const words = [];
+            
+            for (const line of lines) {
+                let part = line.trim();
+                if (!part) continue;
+                
+                // 尝试分离权重（如果有），但目前只使用词本身，因为 JSON 格式可能不被支持
+                // 假设格式是 "词语 权重" 或 "词语"
+                const parts = part.split(/\s+/);
+                if (parts.length > 1) {
+                    const lastPart = parts[parts.length - 1];
+                    if (!isNaN(parseInt(lastPart))) {
+                        // 最后一个是数字，认为是权重，去掉它
+                        part = parts.slice(0, parts.length - 1).join(' ');
+                    }
+                }
+                if (part) words.push(part);
+            }
+            
+            // 返回空格分隔的字符串，而不是 JSON
+            return words.join(' ');
+        }
+
+        // 处理音频
+        async function processAudio() {
+            try {
+                updateUI('processing');
+                
+                // 将音频转换为 WAV 格式
+                const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                const wavBlob = await convertToWav(audioBlob);
+                
+                // 发送到服务器
+                const formData = new FormData();
+                formData.append('audio', wavBlob, 'recording.wav');
+                
+                // 添加热词
+                const hotwords = getHotwords();
+                if (hotwords) {
+                    formData.append('hotwords', hotwords);
+                }
+                
+                // 改为只调用识别接口
+                const response = await fetch('/api/recognize', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    // 保存识别结果（不立即保存数据，等待用户确认）
+                    lastRecognizedText = data.text;
+                    lastAudioId = data.temp_id || data.audio_id; // 使用临时ID
+                    lastConfidence = data.confidence || 0;
+                    lastAudioBase64 = data.audio_base64; // 存储音频数据
+                    
+                    // 保存 ASR 耗时
+                    if (data.timings && data.timings.asr_time) {
+                        lastAsrTime = data.timings.asr_time;
+                    }
+                    
+                    // 显示识别结果区域
+                    recognizedTextDiv.textContent = data.text;
+                    recognitionMeta.innerHTML = `
+                        <span>耗时: ${data.timings.asr_time.toFixed(2)}s</span>
+                        ${data.confidence > 0 ? ` | <span>置信度: ${(data.confidence * 100).toFixed(1)}%</span>` : ''}
+                        ${data.audio_id ? ` | <span style="font-size: 0.8em; color: #999;">ID: ${data.audio_id}</span>` : ''}
+                    `;
+                    recognitionResult.style.display = 'block';
+                    
+                    // 同时填入输入框
+                    textInput.value = data.text;
+                    
+                    updateUI('idle');
+                    
+                    // 提示用户
+                    const statusDiv = document.getElementById('status');
+                    statusDiv.textContent = '识别完成，请确认识别结果';
+                    setTimeout(() => {
+                        if (statusDiv.textContent === '识别完成，请确认识别结果') {
+                            statusDiv.textContent = '准备就绪';
+                        }
+                    }, 3000);
+                    
+                } else {
+                    showError(data.error || '识别失败，请重试');
+                    updateUI('idle');
+                }
+                
+            } catch (error) {
+                console.error('处理音频失败:', error);
+                showError('处理音频时出错: ' + error.message);
+                updateUI('idle');
+            }
+        }
+
+        // 将音频转换为 WAV 格式
+        async function convertToWav(audioBlob) {
+            return new Promise(async (resolve, reject) => {
+                try {
+                    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    const arrayBuffer = await audioBlob.arrayBuffer();
+                    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+                    
+                    // 转换为 16kHz 单声道
+                    const targetSampleRate = 16000;
+                    const offlineContext = new OfflineAudioContext(
+                        1, 
+                        Math.ceil(audioBuffer.duration * targetSampleRate), 
+                        targetSampleRate
+                    );
+                    const source = offlineContext.createBufferSource();
+                    source.buffer = audioBuffer;
+                    source.connect(offlineContext.destination);
+                    source.start();
+                    
+                    const resampledBuffer = await offlineContext.startRendering();
+                    
+                    // 转换为 WAV
+                    const wav = audioBufferToWav(resampledBuffer);
+                    const wavBlob = new Blob([wav], { type: 'audio/wav' });
+                    resolve(wavBlob);
+                } catch (error) {
+                    console.error('音频转换失败:', error);
+                    reject(error);
+                }
+            });
+        }
+
+        // AudioBuffer 转 WAV
+        function audioBufferToWav(buffer) {
+            const length = buffer.length;
+            const arrayBuffer = new ArrayBuffer(44 + length * 2);
+            const view = new DataView(arrayBuffer);
+            const samples = buffer.getChannelData(0);
+            
+            // WAV 文件头
+            const writeString = (offset, string) => {
+                for (let i = 0; i < string.length; i++) {
+                    view.setUint8(offset + i, string.charCodeAt(i));
+                }
+            };
+            
+            writeString(0, 'RIFF');
+            view.setUint32(4, 36 + length * 2, true);
+            writeString(8, 'WAVE');
+            writeString(12, 'fmt ');
+            view.setUint32(16, 16, true);
+            view.setUint16(20, 1, true);  // PCM
+            view.setUint16(22, 1, true);  // 单声道
+            view.setUint32(24, buffer.sampleRate, true);
+            view.setUint32(28, buffer.sampleRate * 2, true);
+            view.setUint16(32, 2, true);  // 字节对齐
+            view.setUint16(34, 16, true); // 位深度
+            writeString(36, 'data');
+            view.setUint32(40, length * 2, true);
+            
+            // 写入 PCM 数据
+            let offset = 44;
+            for (let i = 0; i < length; i++) {
+                const sample = Math.max(-1, Math.min(1, samples[i]));
+                view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
+                offset += 2;
+            }
+            
+            return arrayBuffer;
+        }
+
+        // 更新 UI 状态
+        function updateUI(state) {
+            status.className = `status ${state}`;
+            
+            switch(state) {
+                case 'idle':
+                    status.textContent = '准备就绪';
+                    btnRecord.disabled = false;
+                    btnStop.disabled = true;
+                    waveform.classList.add('hidden');
+                    break;
+                case 'recording':
+                    status.textContent = '正在录音...';
+                    btnRecord.disabled = true;
+                    btnStop.disabled = false;
+                    waveform.classList.remove('hidden');
+                    break;
+                case 'processing':
+                    status.textContent = '正在处理';
+                    btnRecord.disabled = true;
+                    btnStop.disabled = true;
+                    waveform.classList.add('hidden');
+                    break;
+            }
+        }
+
+        // 显示结果
+        function displayResult(recognizedText, answer, audioData, timings, sources, audioId) {
+            const resultDiv = document.createElement('div');
+            
+            let audioHTML = '';
+            if (audioData) {
+                audioHTML = `
+                    <div style="margin-top: 15px;">
+                        <audio controls style="width: 100%; max-width: 500px;">
+                            <source src="${audioData}" type="audio/wav">
+                            您的浏览器不支持音频播放。
+                            </audio>
+                    </div>
+                `;
+            }
+
+            let timingsHTML = '';
+            if (timings) {
+                timingsHTML = '<div style="margin-top: 10px; font-size: 0.85em; color: #666; border-top: 1px solid #eee; padding-top: 10px;">';
+                if (timings.asr_time) timingsHTML += `<span>ASR: ${timings.asr_time.toFixed(2)}s</span> | `;
+                if (timings.rag_time) {
+                    timingsHTML += `<span>RAG: ${timings.rag_time.toFixed(2)}s`;
+                    if (timings.retrieval && timings.llm_generation) {
+                        timingsHTML += ` (检索: ${timings.retrieval.toFixed(2)}s, 生成: ${timings.llm_generation.toFixed(2)}s)`;
+                    }
+                    timingsHTML += `</span> | `;
+                }
+                if (timings.tts_time) timingsHTML += `<span>TTS: ${timings.tts_time.toFixed(2)}s</span> | `;
+                if (timings.total_time) timingsHTML += `<span>Total: ${timings.total_time.toFixed(2)}s</span>`;
+                timingsHTML += '</div>';
+            }
+
+            let sourcesHTML = '';
+            if (sources && sources.length > 0) {
+                sourcesHTML = `
+                    <div style="margin-top: 15px; border-top: 1px solid #eee; padding-top: 10px;">
+                        <details>
+                            <summary style="cursor: pointer; color: #666; font-size: 0.9em; user-select: none;">
+                                📚 参考引用 (${sources.length})
+                            </summary>
+                            <div style="margin-top: 10px; font-size: 0.9em; color: #555; background: #fff; padding: 10px; border-radius: 5px; border: 1px solid #eee;">
+                                ${sources.map((s, i) => `
+                                    <div style="margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px dashed #eee;">
+                                        <div style="font-weight: bold; color: #333; margin-bottom: 5px;">[${i+1}] ${s.source}</div>
+                                        <div style="line-height: 1.5;">${s.content}</div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </details>
+                    </div>
+                `;
+            }
+            
+            resultDiv.innerHTML = `
+                <div class="result-section">
+                    <h3>用户问题</h3>
+                    <div class="result-text">${recognizedText}</div>
+                </div>
+                <div class="result-section answer">
+                    <h3>AI 回答</h3>
+                    <div class="result-text">${answer}</div>
+                    ${sourcesHTML}
+                    ${audioHTML}
+                    ${timingsHTML}
+                </div>
+            `;
+            results.insertBefore(resultDiv, results.firstChild);
+            
+            // 自动播放音频（如果存在）
+            if (audioData) {
+                const audio = resultDiv.querySelector('audio');
+                if (audio) {
+                    audio.play().catch(e => {
+                        console.log('自动播放被阻止，用户需要手动点击播放');
+                    });
+                }
+            }
+        }
+        
+        // 显示错误
+        function showError(message) {
+            const errorDiv = document.createElement('div');
+            errorDiv.className = 'error';
+            errorDiv.textContent = '❌ ' + message;
+            results.insertBefore(errorDiv, results.firstChild);
+            
+            setTimeout(() => {
+                errorDiv.remove();
+            }, 5000);
+        }
+    </script>
+</body>
+</html>
+

@@ -1,0 +1,2 @@
+LangChain 是一个用于开发大语言模型应用的框架。
+llama.cpp 是高效推理 GGML/GGUF 模型的 C++ 库。
