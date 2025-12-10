@@ -158,14 +158,31 @@ class RAGModule:
         )
         self.current_model_type = model_type
 
-    def rebuild_vectorstore(self, upload_dir: str):
+    def rebuild_vectorstore(self, documents_dir: str, images_dir: str = None):
+        """
+        重建向量库，扫描文档目录和图片目录
+        
+        Args:
+            documents_dir: 文档目录路径
+            images_dir: 图片目录路径（可选，图片向量化功能待扩展）
+        """
         self.logger.info("正在重建向量库...")
         self.vectorstore = None
         self.retriever = None
-        files = []
-        if os.path.exists(upload_dir):
-            files = [f for f in os.listdir(upload_dir) if os.path.isfile(os.path.join(upload_dir, f))]
-        if not files:
+        
+        # 扫描文档目录
+        doc_files = []
+        if os.path.exists(documents_dir):
+            doc_files = [f for f in os.listdir(documents_dir) if os.path.isfile(os.path.join(documents_dir, f))]
+        
+        # 扫描图片目录（暂时只记录，不参与向量化）
+        image_files = []
+        if images_dir and os.path.exists(images_dir):
+            image_files = [f for f in os.listdir(images_dir) if os.path.isfile(os.path.join(images_dir, f))]
+            if image_files:
+                self.logger.info("检测到 %d 张图片（图片向量化功能待扩展）", len(image_files))
+        
+        if not doc_files and not image_files:
             self.logger.info("没有文件，向量库为空")
             vs_dir = self._get_combined_vectorstore_dir()
             import shutil
@@ -174,9 +191,10 @@ class RAGModule:
                 shutil.rmtree(vs_dir)
             return
 
+        # 只对文档进行向量化
         all_chunks = []
-        for filename in files:
-            file_path = os.path.join(upload_dir, filename)
+        for filename in doc_files:
+            file_path = os.path.join(documents_dir, filename)
             try:
                 docs = self._load_docs(file_path)
                 chunks = self._split_docs(docs)
@@ -190,7 +208,9 @@ class RAGModule:
             vs_dir = self._get_combined_vectorstore_dir()
             os.makedirs(vs_dir, exist_ok=True)
             self.vectorstore.save_local(vs_dir)
-            self.logger.info("向量库重建完成，共 %d 个文件", len(files))
+            self.logger.info("向量库重建完成，共 %d 个文档文件", len(doc_files))
+            if image_files:
+                self.logger.info("另有 %d 张图片（未参与向量化）", len(image_files))
 
     def add_document(self, file_path: str):
         self.logger.info("正在处理文档: %s", file_path)
@@ -215,13 +235,49 @@ class RAGModule:
             self.logger.error("添加文档失败: %s", e)
             raise
 
-    def query(self, question: str) -> Tuple[str, Dict, List[Dict]]:
+    def add_image(self, image_path: str):
+        """
+        添加图片到知识库（图片向量化功能待扩展）
+        
+        Args:
+            image_path: 图片文件路径
+        """
+        self.logger.info("图片已保存到知识库: %s（图片向量化功能待扩展）", image_path)
+        # 暂时只记录日志，不进行向量化
+        # 后续可以添加 OCR 或图片描述生成功能
+
+    def query(self, question: str = "", image_path: str = None) -> Tuple[str, Dict, List[Dict]]:
+        """
+        RAG 查询，支持文字和图片（图片功能待扩展）
+        
+        Args:
+            question: 文字内容（可为空字符串）
+            image_path: 图片文件路径（可选，None 表示无图片）
+        
+        Returns:
+            (answer, timings, sources)
+        """
         timings = {}
-        if not question.strip():
+        
+        # 校验：文字和图片不能同时为空
+        if not question.strip() and not image_path:
             return "问题不能为空。", timings, []
+        
+        # 图片处理（暂时只记录日志，保留后续扩展）
+        if image_path:
+            if os.path.exists(image_path):
+                self.logger.info("收到图片: %s（图片处理功能待扩展）", image_path)
+            else:
+                self.logger.warning("图片路径不存在: %s", image_path)
+        
+        # 如果只有图片没有文字，返回提示
+        if not question.strip() and image_path:
+            return "当前仅支持文字查询，图片功能待扩展。", timings, []
+        
         if not self.retriever:
             return "知识库为空，请先上传文档。", timings, []
-        self.logger.info("用户问题: %s", question)
+        
+        self.logger.info("用户问题: %s", question if question.strip() else "[无文字，仅图片]")
         try:
             t0 = time.time()
             docs_retrieved = self.retriever.invoke(question)

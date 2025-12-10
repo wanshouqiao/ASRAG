@@ -42,6 +42,7 @@ def after_request(response):
 
 # 路径与配置（ROOT_DIR 为项目根目录）
 UPLOAD_DIR = os.path.join(ROOT_DIR, "uploads", "documents")  # 知识库文件目录
+UPLOAD_KB_IMAGES_DIR = os.path.join(ROOT_DIR, "uploads", "images")  # 知识库图片目录
 UPLOAD_CHAT_IMAGES_DIR = os.path.join(ROOT_DIR, "uploads", "chat_images")  # 对话框图片目录
 CONFIG_FILE = os.path.join(ROOT_DIR, "app_config.json")
 HOTWORDS_FILE = os.path.join(ROOT_DIR, "hotwords.txt")
@@ -168,26 +169,9 @@ def correct_recognition():
         return jsonify({"error": str(e)}), 500
 
 
-# --- RAG 查询 ---
+# --- RAG 查询（支持文字、图片、TTS）---
 @app.route("/api/query", methods=["POST"])
 def query():
-    try:
-        data = request.get_json()
-        question = data.get("question", "").strip()
-        if not question:
-            return jsonify({"error": "问题不能为空"}), 400
-        t0 = time.time()
-        answer, rag_timings, sources = rag_module.query(question)
-        timings = {"rag_time": time.time() - t0}
-        timings.update(rag_timings)
-        return jsonify({"success": True, "answer": answer, "timings": timings, "sources": sources})
-    except Exception as e:
-        logger.error("查询 API 错误: %s", e)
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/text_chat", methods=["POST"])
-def text_chat():
     start_time = time.time()
     timings = {}
     try:
@@ -238,8 +222,9 @@ def text_chat():
         # 确保 text 不为 None（可能为空字符串）
         text_for_rag = text if text else ""
         
+        # 传递文字和图片给 RAG 模块处理
         t0 = time.time()
-        answer, rag_timings, sources = rag_module.query(text_for_rag)
+        answer, rag_timings, sources = rag_module.query(question=text_for_rag, image_path=image_path)
         timings["rag_time"] = time.time() - t0
         timings.update(rag_timings)
         t0 = time.time()
@@ -270,20 +255,43 @@ def text_chat():
         result["audio"] = None
         return jsonify(result)
     except Exception as e:
-        logger.error("文本对话 API 错误: %s", e)
+        logger.error("对话 API 错误: %s", e)
         return jsonify({"error": str(e)}), 500
 
 
 # --- 文件管理 ---
 @app.route("/api/files", methods=["GET"])
 def list_files():
-    if not os.path.exists(UPLOAD_DIR):
-        return jsonify({"success": True, "files": []})
     files = []
-    for f in os.listdir(UPLOAD_DIR):
-        path = os.path.join(UPLOAD_DIR, f)
-        if os.path.isfile(path):
-            files.append({"name": f, "size": os.path.getsize(path), "mtime": os.path.getmtime(path)})
+    
+    # 扫描文档目录
+    if os.path.exists(UPLOAD_DIR):
+        for f in os.listdir(UPLOAD_DIR):
+            path = os.path.join(UPLOAD_DIR, f)
+            if os.path.isfile(path):
+                files.append(
+                    {
+                        "name": f,
+                        "size": os.path.getsize(path),
+                        "mtime": os.path.getmtime(path),
+                        "file_type": "document",
+                    }
+                )
+    
+    # 扫描图片目录
+    if os.path.exists(UPLOAD_KB_IMAGES_DIR):
+        for f in os.listdir(UPLOAD_KB_IMAGES_DIR):
+            path = os.path.join(UPLOAD_KB_IMAGES_DIR, f)
+            if os.path.isfile(path):
+                files.append(
+                    {
+                        "name": f,
+                        "size": os.path.getsize(path),
+                        "mtime": os.path.getmtime(path),
+                        "file_type": "image",
+                    }
+                )
+    
     files.sort(key=lambda x: x["mtime"], reverse=True)
     return jsonify({"success": True, "files": files})
 
@@ -293,12 +301,25 @@ def delete_file():
     try:
         data = request.get_json()
         filename = data.get("filename")
+        file_type = data.get("file_type")
+        
         if not filename:
             return jsonify({"error": "文件名不能为空"}), 400
-        file_path = os.path.join(UPLOAD_DIR, filename)
+        if not file_type:
+            return jsonify({"error": "文件类型不能为空"}), 400
+        
+        # 根据文件类型判断删除目录
+        if file_type == "document":
+            file_path = os.path.join(UPLOAD_DIR, filename)
+        elif file_type == "image":
+            file_path = os.path.join(UPLOAD_KB_IMAGES_DIR, filename)
+        else:
+            return jsonify({"error": "不支持的文件类型"}), 400
+        
         if os.path.exists(file_path):
             os.remove(file_path)
-            rag_module.rebuild_vectorstore(UPLOAD_DIR)
+            # 重建向量库（只重建文档向量库，图片暂时不参与向量化）
+            rag_module.rebuild_vectorstore(UPLOAD_DIR, UPLOAD_KB_IMAGES_DIR)
             return jsonify({"success": True, "message": "文件已删除并重建知识库"})
         return jsonify({"error": "文件不存在"}), 404
     except Exception as e:
@@ -314,19 +335,52 @@ def upload_kb():
         file = request.files["file"]
         if file.filename == "":
             return jsonify({"error": "文件名为空"}), 400
+        
         filename = os.path.basename(file.filename)
         name, ext = os.path.splitext(filename)
+        ext_lower = ext.lower().lstrip(".")
+        
+        # 判断文件类型：图片格式
+        image_extensions = {"jpg", "jpeg", "png", "webp", "gif", "bmp"}
+        is_image = ext_lower in image_extensions
+        
         timestamp = int(time.time())
         unique_filename = f"{name}_{timestamp}{ext}"
-        os.makedirs(UPLOAD_DIR, exist_ok=True)
-        save_path = os.path.join(UPLOAD_DIR, unique_filename)
-        file.save(save_path)
-        rag_module.add_document(save_path)
+        
+        if is_image:
+            # 图片文件：保存到知识库图片目录
+            os.makedirs(UPLOAD_KB_IMAGES_DIR, exist_ok=True)
+            save_path = os.path.join(UPLOAD_KB_IMAGES_DIR, unique_filename)
+            
+            # 图片大小校验（10MB）
+            image_bytes = file.read()
+            max_size = 10 * 1024 * 1024  # 10MB
+            if len(image_bytes) > max_size:
+                return jsonify({"error": "图片大小超出 10MB 限制"}), 400
+            
+            file.seek(0)  # 重置文件指针
+            file.save(save_path)
+            rag_module.add_image(save_path)
+            file_type = "image"
+        else:
+            # 文档文件：保存到知识库文档目录
+            os.makedirs(UPLOAD_DIR, exist_ok=True)
+            save_path = os.path.join(UPLOAD_DIR, unique_filename)
+            file.save(save_path)
+            rag_module.add_document(save_path)
+            file_type = "document"
+        
         config = load_config()
         config["last_uploaded_kb"] = save_path
         save_config(config)
+        
         return jsonify(
-            {"success": True, "message": f"文件已上传并添加到知识库: {unique_filename}", "kb_path": save_path}
+            {
+                "success": True,
+                "message": f"文件已上传并添加到知识库: {unique_filename}",
+                "kb_path": save_path,
+                "file_type": file_type,
+            }
         )
     except Exception as e:
         logger.error("上传知识库失败: %s", e)

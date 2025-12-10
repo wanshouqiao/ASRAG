@@ -6,10 +6,11 @@
 1. 先启动 llama.cpp server：
 cd /data/AI/LlamaCPPProject/llama.cpp-master/build/bin
 ./llama-server \
--m /data/AI/LlamaCPPProject/llm/qwen2.5-7b-instruct-q4_k_m-00001-of-00002.gguf \
--ngl -1 \
---host 0.0.0.0 \
---port 8000
+  -m /data/AI/LlamaCPPProject/llm/google_gemma-3-4b-it-Q8_0.gguf \
+  --mmproj /data/AI/LlamaCPPProject/llm/mmproj-google_gemma-3-4b-it-f16.gguf \
+  -ngl -1 \
+  --host 0.0.0.0 \
+  --port 8000
 
 2. 启动funasr
 conda activate D:\AI\LlamaCPPProject\env

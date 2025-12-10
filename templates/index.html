@@ -324,7 +324,7 @@
         <div class="result-section" style="margin-top:15px;">
             <h3>知识库文件管理</h3>
             <div style="margin-top:10px; margin-bottom:15px;">
-                <input type="file" id="fileInput" accept=".txt,.md,.pdf" style="margin-right:10px;"/>
+                <input type="file" id="fileInput" accept=".txt,.md,.pdf,.jpg,.jpeg,.png,.webp,.gif,.bmp,image/*" style="margin-right:10px;"/>
                 <button id="btnUpload" class="btn-record" style="padding: 8px 15px; font-size: 14px;">上传并添加到知识库</button>
                 <div id="uploadStatus" class="result-text" style="margin-top:5px; font-size: 0.9em;"></div>
             </div>
@@ -471,13 +471,18 @@
             files.forEach(file => {
                 const date = new Date(file.mtime * 1000).toLocaleString();
                 const size = (file.size / 1024).toFixed(1) + ' KB';
+                const fileType = file.file_type || 'document'; // 向后兼容，默认为 document
+                const typeIcon = fileType === 'image' ? '🖼️' : '📄';
+                const typeLabel = fileType === 'image' ? '图片' : '文档';
+                // 转义文件名中的单引号，避免 onclick 中的引号冲突
+                const safeFilename = file.name.replace(/'/g, "\\'");
                 html += `
                     <li style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #f0f0f0;">
                         <div>
-                            <div style="font-weight: 500; color: #333;">${file.name}</div>
+                            <div style="font-weight: 500; color: #333;">${typeIcon} ${file.name} <span style="font-size: 0.8em; color: #999; font-weight: normal;">(${typeLabel})</span></div>
                             <div style="font-size: 0.8em; color: #999;">${date} · ${size}</div>
                         </div>
-                        <button onclick="deleteFile('${file.name}')" style="padding: 5px 10px; font-size: 12px; background: #ff5252; color: white; border: none; border-radius: 5px; cursor: pointer;">删除</button>
+                        <button onclick="deleteFile('${safeFilename}', '${fileType}')" style="padding: 5px 10px; font-size: 12px; background: #ff5252; color: white; border: none; border-radius: 5px; cursor: pointer;">删除</button>
                     </li>
                 `;
             });
@@ -486,8 +491,14 @@
         }
 
         // 删除文件
-        window.deleteFile = async function(filename) {
-            if (!confirm(`确定要删除文件 "${filename}" 吗？这将重建知识库，可能需要一点时间。`)) {
+        window.deleteFile = async function(filename, fileType) {
+            if (!fileType) {
+                alert('错误：无法确定文件类型，请刷新页面后重试');
+                return;
+            }
+            
+            const fileTypeLabel = fileType === 'image' ? '图片' : '文档';
+            if (!confirm(`确定要删除${fileTypeLabel} "${filename}" 吗？这将重建知识库，可能需要一点时间。`)) {
                 return;
             }
 
@@ -503,7 +514,10 @@
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ filename: filename })
+                    body: JSON.stringify({ 
+                        filename: filename,
+                        file_type: fileType
+                    })
                 });
                 
                 const data = await response.json();
@@ -639,12 +653,12 @@
                         formData.append('audio_id', lastAudioId);
                     }
                     formData.append('image', imageFile);
-                    response = await fetch('/api/text_chat', {
+                    response = await fetch('/api/query', {
                         method: 'POST',
                         body: formData
                     });
                 } else {
-                    response = await fetch('/api/text_chat', {
+                    response = await fetch('/api/query', {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json'
