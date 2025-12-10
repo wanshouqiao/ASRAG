@@ -607,8 +607,10 @@
         // 发送文本
         async function sendText() {
             const text = textInput.value.trim();
-            if (!text) return;
             const imageFile = imageInput.files && imageInput.files[0];
+            
+            // 只有文字和图片都为空时才阻止发送
+            if (!text && !imageFile) return;
 
             if (imageFile) {
                 const allowed = ['image/jpeg', 'image/png', 'image/webp'];
@@ -632,7 +634,7 @@
                 let response;
                 if (imageFile) {
                     const formData = new FormData();
-                    formData.append('text', text);
+                    formData.append('text', text || '');  // 允许空字符串
                     if (lastAudioId) {
                         formData.append('audio_id', lastAudioId);
                     }

@@ -41,9 +41,8 @@ def after_request(response):
 
 
 # 路径与配置（ROOT_DIR 为项目根目录）
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
-ROOT_DIR = os.path.dirname(APP_DIR)
-UPLOAD_DIR = os.path.join(ROOT_DIR, "uploads")
+UPLOAD_DIR = os.path.join(ROOT_DIR, "uploads", "documents")  # 知识库文件目录
+UPLOAD_CHAT_IMAGES_DIR = os.path.join(ROOT_DIR, "uploads", "chat_images")  # 对话框图片目录
 CONFIG_FILE = os.path.join(ROOT_DIR, "app_config.json")
 HOTWORDS_FILE = os.path.join(ROOT_DIR, "hotwords.txt")
 KB_PATH = os.path.join(ROOT_DIR, "knowledge.txt")
@@ -194,6 +193,7 @@ def text_chat():
     try:
         text = ""
         audio_id = None
+        image_id = None
         image_path = None
 
         # 兼容 form-data（携带图片）与 JSON
@@ -217,52 +217,58 @@ def text_chat():
                 if len(image_bytes) > max_size:
                     return jsonify({"error": "图片大小超出 2MB 限制"}), 400
 
-                os.makedirs(UPLOAD_DIR, exist_ok=True)
+                # 保存到对话框图片目录
+                os.makedirs(UPLOAD_CHAT_IMAGES_DIR, exist_ok=True)
                 filename = f"image_{int(time.time())}_{uuid.uuid4().hex[:8]}.{ext}"
-                save_path = os.path.join(UPLOAD_DIR, filename)
+                save_path = os.path.join(UPLOAD_CHAT_IMAGES_DIR, filename)
                 with open(save_path, "wb") as f:
                     f.write(image_bytes)
                 image_path = save_path
-                print(f"[image-upload] saved to {image_path}")
+                image_id = filename
+                logger.info(f"对话框图片已保存: {image_path}")
         else:
             data = request.get_json() or {}
             text = data.get("text", "").strip()
             audio_id = data.get("audio_id")
 
-        if not text:
-            return jsonify({"error": "输入文本不能为空"}), 400
+        # 校验：只有文字和图片都为空时才拒绝
+        if not text and not image_path:
+            return jsonify({"error": "输入文本和图片不能同时为空"}), 400
+        
+        # 确保 text 不为 None（可能为空字符串）
+        text_for_rag = text if text else ""
+        
         t0 = time.time()
-        answer, rag_timings, sources = rag_module.query(text)
+        answer, rag_timings, sources = rag_module.query(text_for_rag)
         timings["rag_time"] = time.time() - t0
         timings.update(rag_timings)
         t0 = time.time()
         audio_bytes = rag_module.text_to_speech(answer)
         timings["tts_time"] = time.time() - t0
         timings["total_time"] = time.time() - start_time
+        
+        # 构建返回结果
+        result = {
+            "success": True,
+            "recognized_text": text if text else "",
+            "answer": answer,
+            "audio_id": audio_id,
+            "timings": timings,
+            "sources": sources,
+        }
+        
+        # 如果有图片，添加图片信息
+        if image_id:
+            result["image_id"] = image_id
+            result["image_path"] = os.path.relpath(image_path, ROOT_DIR) if image_path else None
+        
         if audio_bytes:
             audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
-            return jsonify(
-                {
-                    "success": True,
-                    "recognized_text": text,
-                    "answer": answer,
-                    "audio": f"data:audio/wav;base64,{audio_base64}",
-                    "audio_id": audio_id,
-                    "timings": timings,
-                    "sources": sources,
-                }
-            )
-        return jsonify(
-            {
-                "success": True,
-                "recognized_text": text,
-                "answer": answer,
-                "audio": None,
-                "audio_id": audio_id,
-                "timings": timings,
-                "sources": sources,
-            }
-        )
+            result["audio"] = f"data:audio/wav;base64,{audio_base64}"
+            return jsonify(result)
+        
+        result["audio"] = None
+        return jsonify(result)
     except Exception as e:
         logger.error("文本对话 API 错误: %s", e)
         return jsonify({"error": str(e)}), 500
@@ -411,11 +417,14 @@ def main():
     FUNASR_WS_URL = "ws://127.0.0.1:10095/"
     LLM_API_BASE = "http://localhost:8000/#"
     LLM_API_KEY = ""
-    MODEL_NAME = "qwen2.5-7b-instruct"
-
+    
+    # 从配置文件读取模型名称，如果没有则使用默认值
     config = load_config()
+    MODEL_NAME = config.get("model_name", "qwen2.5-7b-instruct")
     saved_model_type = config.get("model_type", "local")
     collect_dialect_data = config.get("collect_dialect_data", True)
+    
+    logger.info("使用模型名称: %s", MODEL_NAME)
 
     debug_mode = True
     if not debug_mode or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
