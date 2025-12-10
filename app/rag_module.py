@@ -17,6 +17,7 @@ import torch
 import base64
 import httpx
 from pathlib import Path
+import numpy as np
 from kokoro import KModel, KPipeline
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
@@ -80,6 +81,79 @@ class VisualizedBGEEmbeddings(Embeddings):
             logging.exception("图片编码失败: %s", image_path)
             raise
 
+    def _encode_multimodal(self, image_path: str, text: str) -> List[float]:
+        """
+        同时使用图片 + 文本生成联合向量（模型原生支持）。
+        """
+        try:
+            res = self.model.encode(image=image_path, text=text)
+
+            # 归一化为 1D 向量
+            def to_array(obj):
+                if obj is None:
+                    return None
+                if hasattr(obj, "detach"):
+                    obj = obj.detach()
+                if hasattr(obj, "cpu"):
+                    obj = obj.cpu()
+                if hasattr(obj, "numpy"):
+                    return obj.numpy()
+                try:
+                    return np.array(obj)
+                except Exception:
+                    return None
+
+            candidates = []
+            # 直接 tensor/ndarray
+            arr = to_array(res)
+            if arr is not None:
+                candidates.append(arr)
+
+            # list/tuple: 取能转 array 的
+            if isinstance(res, (list, tuple)):
+                for item in res:
+                    arr_item = to_array(item)
+                    if arr_item is not None:
+                        candidates.append(arr_item)
+                    if isinstance(item, dict):
+                        dense = item.get("dense_vecs") or item.get("embedding")
+                        arr_dense = to_array(dense)
+                        if arr_dense is not None:
+                            candidates.append(arr_dense)
+
+            # dict
+            if isinstance(res, dict):
+                dense = res.get("dense_vecs") or res.get("embedding")
+                arr_dense = to_array(dense)
+                if arr_dense is not None:
+                    candidates.append(arr_dense)
+                for v in res.values():
+                    arr_v = to_array(v)
+                    if arr_v is not None:
+                        candidates.append(arr_v)
+                    if isinstance(v, (list, tuple)):
+                        for item in v:
+                            arr_item = to_array(item)
+                            if arr_item is not None:
+                                candidates.append(arr_item)
+
+            for arr in candidates:
+                if arr is None:
+                    continue
+                arr = np.array(arr)
+                if arr.ndim > 1:
+                    arr = arr[0]
+                if arr.ndim == 0:
+                    continue
+                vec = arr.astype(float).tolist()
+                if vec:
+                    return vec
+
+            raise ValueError(f"多模态编码返回未知格式，无法提取向量: type={type(res)}")
+        except Exception:
+            logging.exception("多模态编码失败: image=%s, text=%s", image_path, text[:50])
+            raise
+
     def _encode_text_batch(self, texts: List[str]) -> List[List[float]]:
         """
         批量文本编码，减少 tokenizer 调用次数。
@@ -123,6 +197,9 @@ class VisualizedBGEEmbeddings(Embeddings):
 
     def embed_image(self, image_path: str) -> List[float]:
         return self._encode_image(image_path)
+
+    def embed_multimodal(self, image_path: str, text: str) -> List[float]:
+        return self._encode_multimodal(image_path, text)
 
 
 class RAGModule:
@@ -383,18 +460,39 @@ class RAGModule:
         self.logger.info("用户问题: %s", question if question.strip() else "[无文字]") 
         try:
             t0 = time.time()
-            if image_path:
-                if not os.path.exists(image_path):
-                    return f"错误：图片路径不存在 {image_path}", timings, []
-                query_vector = self.embeddings.embed_image(image_path)
-                docs_retrieved = self.vectorstore.similarity_search_by_vector(query_vector, k=3)
-                # 如果有文字，拼接到提示词
-                if question.strip():
-                    question = f"结合图片内容回答：{question}"
+            query_vector = None
+            # 根据输入的模态组合选择编码策略
+            has_text = bool(question.strip())
+            has_image = bool(image_path)
+            if has_image and not os.path.exists(image_path):
+                return f"错误：图片路径不存在 {image_path}", timings, []
+
+            try:
+                if has_image and has_text:
+                    # 文本+图片联合向量
+                    query_vector = self.embeddings.embed_multimodal(image_path, question)
+                    # 提示词保留原问题
+                elif has_image:
+                    query_vector = self.embeddings.embed_image(image_path)
+                    # 如果没有文字，补一个默认问题
+                    if not has_text:
+                        question = "请比较用户图片与知识库检索到的文本/图片的相似与不同，并描述用户图片。"
                 else:
-                    question = "描述这张图片的内容。"
-            else:
-                docs_retrieved = self.retriever.invoke(question)
+                    # 纯文本
+                    docs_retrieved = self.retriever.invoke(question)
+            except Exception as e:
+                self.logger.warning("查询编码失败，将回退到单模态：%s", e)
+                # 回退策略：如果两模态失败，尝试图片；否则文本
+                if has_image:
+                    query_vector = self.embeddings.embed_image(image_path)
+                    if not has_text:
+                        question = "描述这张图片的内容。"
+                else:
+                    docs_retrieved = self.retriever.invoke(question)
+
+            if query_vector is not None:
+                docs_retrieved = self.vectorstore.similarity_search_by_vector(query_vector, k=3)
+
             timings["retrieval"] = time.time() - t0
             def _fmt_content(doc: Document):
                 if isinstance(doc.page_content, str) and doc.page_content.startswith("image://"):
@@ -404,7 +502,7 @@ class RAGModule:
             context = "\n\n".join(_fmt_content(d) for d in docs_retrieved)
 
             # 收集命中图片，准备多模态输入
-            image_paths = [
+            kb_image_paths = [
                 doc.metadata.get("source")
                 for doc in docs_retrieved
                 if isinstance(doc.page_content, str)
@@ -412,6 +510,11 @@ class RAGModule:
                 and doc.metadata.get("type") == "image"
                 and doc.metadata.get("source")
             ]
+
+            # 用户查询携带的图片（对话图片）也参与比较
+            query_images = []
+            if has_image:
+                query_images.append(image_path)
 
             answer = ""
             sources = [
@@ -423,11 +526,12 @@ class RAGModule:
                 for doc in docs_retrieved
             ]
 
-            use_vision = bool(image_paths) and self.llm_config[self.current_model_type].get("supports_vision", False)
+            # 只有在有图可用且模型声明支持 vision 时走多模态
+            use_vision = bool(kb_image_paths or query_images) and self.llm_config[self.current_model_type].get("supports_vision", False)
 
             if use_vision:
                 try:
-                    vision_payload = self._build_vision_payload(question, context, image_paths)
+                    vision_payload = self._build_vision_payload(question, context, kb_image_paths, query_images)
                     self.logger.info("正在生成回答（图文）...")
                     t0 = time.time()
                     answer = self._invoke_vision(vision_payload)
@@ -458,47 +562,68 @@ class RAGModule:
             return f"抱歉，生成回答时出现错误: {str(e)}", timings, []
 
     # --- 多模态生成 ---
-    def _build_vision_payload(self, question: str, context: str, image_paths: List[str]) -> Dict[str, Any]:
+    def _build_vision_payload(self, question: str, context: str, kb_image_paths: List[str], query_images: List[str]) -> Dict[str, Any]:
         """
         将文本与图片封装为 OpenAI 风格的多模态消息，适配本地 llama.cpp server。
         """
         # 限制图片数量与大小（简单限制）
         max_imgs = 3
         items = []
-        for path in image_paths[:max_imgs]:
+
+        def add_image_with_label(label: str, path: str):
             try:
                 p = Path(path)
                 if not p.exists() or not p.is_file():
                     self.logger.warning("图片不存在，跳过: %s", path)
-                    continue
+                    return
                 data = p.read_bytes()
                 if len(data) > 5 * 1024 * 1024:  # 5MB 限制
                     self.logger.warning("图片过大(>5MB)，跳过: %s", path)
-                    continue
+                    return
                 b64 = base64.b64encode(data).decode("utf-8")
                 mime = "image/png"
                 if path.lower().endswith((".jpg", ".jpeg")):
                     mime = "image/jpeg"
                 elif path.lower().endswith(".webp"):
                     mime = "image/webp"
-                items.append(
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:{mime};base64,{b64}"},
-                    }
-                )
+                items.append({"type": "text", "text": label})
+                items.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
             except Exception as e:
                 self.logger.warning("读取图片失败，跳过 %s，原因: %s", path, e)
+
+        # 先放查询图片，再放 KB 图片，并带标签
+        count = 0
+        if query_images:
+            for i, path in enumerate(query_images, 1):
+                if count >= max_imgs:
+                    break
+                add_image_with_label(f"【用户图片{i}】", path)
+                count += 1
+        if kb_image_paths and count < max_imgs:
+            for i, path in enumerate(kb_image_paths, 1):
+                if count >= max_imgs:
+                    break
+                add_image_with_label(f"【知识库图片{i}】", path)
+                count += 1
+
+        # 根据是否有用户文本，调整引导
+        if query_images and not context.strip():
+            kb_hint = "（知识库未命中文本）"
+        else:
+            kb_hint = ""
 
         text_parts = [
             {
                 "type": "text",
                 "text": (
-                    "你是一个中文助理，请根据提供的知识库文本和图片回答用户问题。"
-                    "如果缺少相关信息，就直接回答不知道。"
+                    "你是一个中文助理，请结合提供的知识库文本和图片，以及用户提供的图片，回答用户问题。"
+                    "如果缺少相关信息，就直接回答不知道。请尽量对比用户图片与知识库图片的相似与不同。"
                 ),
             },
-            {"type": "text", "text": f"【知识库文本】:\n{context}"},
+            {
+                "type": "text",
+                "text": f"【知识库文本】{kb_hint}:\n{context}" if context else "【知识库文本】：无",
+            },
             {"type": "text", "text": f"【用户问题】:\n{question}"},
         ]
 
