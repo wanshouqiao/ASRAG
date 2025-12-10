@@ -469,7 +469,7 @@ def recognize_and_query():
 def main():
     global asr_module, rag_module
     FUNASR_WS_URL = "ws://127.0.0.1:10095/"
-    LLM_API_BASE = "http://localhost:8000/#"
+    LLM_API_BASE = "http://localhost:8000"
     LLM_API_KEY = ""
     
     # 从配置文件读取模型名称，如果没有则使用默认值
@@ -494,7 +494,8 @@ def main():
                 llm_api_base=LLM_API_BASE,
                 llm_api_key=LLM_API_KEY,
                 model_name=MODEL_NAME,
-                embedding_model=r"/data/AI/LlamaCPPProject/embedding/bge-large-zh-v1.5",
+                base_model_path="/data/AI/LlamaCPPProject/embedding/bge-m3",
+                visual_weight_path="/data/AI/LlamaCPPProject/embedding/bge-visualized/Visualized_m3.pth",
                 base_dir=ROOT_DIR,
             )
             if saved_model_type and saved_model_type != "local":

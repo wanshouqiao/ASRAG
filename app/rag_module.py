@@ -1,29 +1,128 @@
 #!/usr/bin/env python3
 """
 RAG 模块：负责向量库管理、LLM 调用、RAG 查询、TTS。
-保持原有逻辑，不增加新功能。
+使用 bge-m3 多模态模型进行文本和图片嵌入。
 """
 
 import io
 import json
 import logging
 import os
+import shutil
 import time
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Any
 
 import soundfile as sf
 import torch
+import base64
+import httpx
+from pathlib import Path
 from kokoro import KModel, KPipeline
+from langchain_core.documents import Document
+from langchain_core.embeddings import Embeddings
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_community.vectorstores import FAISS
-from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_openai import ChatOpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from PIL import Image
+
+# 动态导入 visual_bge
+try:
+    from visual_bge.modeling import Visualized_BGE
+except ImportError:
+    raise ImportError("请确保 visual_bge 已安装或在 Python 路径中。")
 
 try:
     from langchain_community.document_loaders import PyMuPDFLoader
 except ImportError:  # pragma: no cover - optional dependency
     PyMuPDFLoader = None
+
+
+class VisualizedBGEEmbeddings(Embeddings):
+    """
+    LangChain Embeddings 包装类，用于 Visualized_BGE 多模态模型。
+    支持文本与图片；图片以前缀 image:// 路径字符串表示。
+    """
+
+    def __init__(self, model: Visualized_BGE):
+        self.model = model
+
+    def _encode_text(self, text: str) -> List[float]:
+        """
+        使用 Visualized_BGE 的 encode_text，返回单条文本的向量。
+        """
+        try:
+            device = next(self.model.parameters()).device
+            inputs = self.model.tokenizer(
+                [text],
+                padding=True,
+                truncation=True,
+                max_length=512,
+                return_tensors="pt",
+            )
+            inputs = {k: v.to(device) for k, v in inputs.items()}
+            vec = self.model.encode_text(inputs)  # Tensor [1, dim]
+            return vec[0].tolist()
+        except Exception as e:
+            logging.exception("文本编码失败: %s", text[:50])
+            raise
+
+    def _encode_image(self, image_path: str) -> List[float]:
+        try:
+            image = Image.open(image_path).convert("RGB")
+            # 视觉模型需要 BCHW Tensor，使用模型自带预处理
+            pixel = self.model.preprocess_val(image)          # CHW tensor
+            pixel = pixel.unsqueeze(0)                        # BCHW
+            pixel = pixel.to(next(self.model.parameters()).device)
+            vec = self.model.encode_image(pixel)              # [1, dim]
+            return vec[0].tolist()
+        except Exception as e:
+            logging.exception("图片编码失败: %s", image_path)
+            raise
+
+    def _encode_text_batch(self, texts: List[str]) -> List[List[float]]:
+        """
+        批量文本编码，减少 tokenizer 调用次数。
+        """
+        device = next(self.model.parameters()).device
+        inputs = self.model.tokenizer(
+            texts,
+            padding=True,
+            truncation=True,
+            max_length=512,
+            return_tensors="pt",
+        )
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+        vec = self.model.encode_text(inputs)  # [B, dim]
+        return vec.tolist()
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        # 分离文本与图片，批量编码文本以减少 tokenizer 调用
+        vectors: List[List[float]] = [None] * len(texts)  # type: ignore
+        text_items: List[Tuple[int, str]] = []
+        for idx, text in enumerate(texts):
+            if isinstance(text, str) and text.startswith("image://"):
+                vectors[idx] = self._encode_image(text[len("image://") :])
+            else:
+                text_items.append((idx, text))
+
+        if text_items:
+            idxs, text_batch = zip(*text_items)
+            text_vecs = self._encode_text_batch(list(text_batch))
+            for i, v in zip(idxs, text_vecs):
+                vectors[i] = v
+
+        if any(len(v) == 0 for v in vectors):
+            raise ValueError("编码结果为空，可能图片或文本编码失败")
+        return vectors
+
+    def embed_query(self, text: str) -> List[float]:
+        if isinstance(text, str) and text.startswith("image://"):
+            return self._encode_image(text[len("image://") :])
+        return self._encode_text(text)
+
+    def embed_image(self, image_path: str) -> List[float]:
+        return self._encode_image(image_path)
 
 
 class RAGModule:
@@ -35,11 +134,13 @@ class RAGModule:
         llm_api_base: str,
         llm_api_key: str,
         model_name: str,
-        embedding_model: str,
+        base_model_path: str,
+        visual_weight_path: str,
         base_dir: str,
     ):
         self.logger = logging.getLogger(__name__)
-        self.embedding_model_name = embedding_model
+        self.base_model_path = base_model_path
+        self.visual_weight_path = visual_weight_path
         self.base_dir = base_dir
 
         # LLM 配置
@@ -48,6 +149,7 @@ class RAGModule:
                 "api_base": llm_api_base,
                 "api_key": llm_api_key,
                 "model_name": model_name,
+                "supports_vision": True,  # 假设本地接口兼容 OpenAI 图文格式
             }
         }
         self.current_model_type = "local"
@@ -93,27 +195,31 @@ class RAGModule:
         return speed_callable
 
     def _init_embeddings(self):
-        embedding_path = os.path.join(self.base_dir, "embedding")
-        encode_kwargs = {"normalize_embeddings": True}
-        if os.path.exists(embedding_path) and os.path.exists(os.path.join(embedding_path, "modules.json")):
-            self.logger.info("使用本地嵌入模型: %s", embedding_path)
-            return HuggingFaceEmbeddings(
-                model_name=embedding_path, model_kwargs={"device": "cuda"}, encode_kwargs=encode_kwargs
+        """
+        加载 bge-m3 多模态模型（文本 + 图片）。
+        """
+        self.logger.info("正在加载多模态嵌入模型 bge-m3...")
+        self.logger.info("基础模型路径: %s", self.base_model_path)
+        self.logger.info("视觉权重路径: %s", self.visual_weight_path)
+        try:
+            model = Visualized_BGE(
+                model_name_bge=self.base_model_path,
+                model_weight=self.visual_weight_path,
+                normlized=True,
+                sentence_pooling_method="cls",
             )
-        self.logger.info("使用在线嵌入模型: %s", self.embedding_model_name)
-        self.logger.info("注意：首次使用会下载模型到本地缓存，之后会使用缓存")
-        return HuggingFaceEmbeddings(
-            model_name=self.embedding_model_name,
-            model_kwargs={"device": "cuda"},
-            encode_kwargs=encode_kwargs,
-        )
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            # Visualized_BGE 本身是 nn.Module，直接迁移到目标设备
+            model.to(device)
+            self.logger.info("✓ 多模态嵌入模型加载成功！")
+            return VisualizedBGEEmbeddings(model)
+        except Exception as e:
+            self.logger.exception("加载多模态嵌入模型失败: %s", e)
+            raise
 
     def _get_combined_vectorstore_dir(self) -> str:
-        model_name = os.path.basename(self.embedding_model_name)
-        safe_model_name = (
-            model_name.replace("/", "_").replace("\\", "_").replace("-", "_").replace(":", "_")
-        )
-        return os.path.join(self.base_dir, "vectorstores", f"combined_kb_{safe_model_name}")
+        # 与新模型绑定，避免与旧向量库冲突
+        return os.path.join(self.base_dir, "vectorstores", "combined_kb_bge_m3_visualized")
 
     def _init_vectorstore(self, default_kb_path: str):
         vs_dir = self._get_combined_vectorstore_dir()
@@ -160,57 +266,54 @@ class RAGModule:
 
     def rebuild_vectorstore(self, documents_dir: str, images_dir: str = None):
         """
-        重建向量库，扫描文档目录和图片目录
-        
-        Args:
-            documents_dir: 文档目录路径
-            images_dir: 图片目录路径（可选，图片向量化功能待扩展）
+        重建向量库，扫描文档目录和图片目录（文本+图片一起向量化）
         """
         self.logger.info("正在重建向量库...")
         self.vectorstore = None
         self.retriever = None
-        
-        # 扫描文档目录
-        doc_files = []
-        if os.path.exists(documents_dir):
-            doc_files = [f for f in os.listdir(documents_dir) if os.path.isfile(os.path.join(documents_dir, f))]
-        
-        # 扫描图片目录（暂时只记录，不参与向量化）
-        image_files = []
-        if images_dir and os.path.exists(images_dir):
-            image_files = [f for f in os.listdir(images_dir) if os.path.isfile(os.path.join(images_dir, f))]
-            if image_files:
-                self.logger.info("检测到 %d 张图片（图片向量化功能待扩展）", len(image_files))
-        
-        if not doc_files and not image_files:
-            self.logger.info("没有文件，向量库为空")
-            vs_dir = self._get_combined_vectorstore_dir()
-            import shutil
 
+        all_docs: List[Document] = []
+
+        # 扫描文档目录
+        if os.path.exists(documents_dir):
+            for filename in os.listdir(documents_dir):
+                file_path = os.path.join(documents_dir, filename)
+                if os.path.isfile(file_path):
+                    try:
+                        docs = self._load_docs(file_path)
+                        chunks = self._split_docs(docs)
+                        all_docs.extend(chunks)
+                        self.logger.info("已加载并切分文档: %s", filename)
+                    except Exception as e:
+                        self.logger.error("处理文档失败 %s: %s", filename, e)
+
+        # 扫描图片目录
+        if images_dir and os.path.exists(images_dir):
+            for filename in os.listdir(images_dir):
+                file_path = os.path.join(images_dir, filename)
+                if os.path.isfile(file_path):
+                    # 图片以 image:// 前缀保存，便于在嵌入时识别
+                    doc = Document(page_content=f"image://{file_path}", metadata={"source": file_path, "type": "image"})
+                    all_docs.append(doc)
+                    self.logger.info("已添加图片: %s", filename)
+
+        if not all_docs:
+            self.logger.info("没有找到任何文档或图片，向量库为空")
+            vs_dir = self._get_combined_vectorstore_dir()
             if os.path.exists(vs_dir):
                 shutil.rmtree(vs_dir)
             return
 
-        # 只对文档进行向量化
-        all_chunks = []
-        for filename in doc_files:
-            file_path = os.path.join(documents_dir, filename)
-            try:
-                docs = self._load_docs(file_path)
-                chunks = self._split_docs(docs)
-                all_chunks.extend(chunks)
-            except Exception as e:
-                self.logger.error("读取文件 %s 失败: %s", filename, e)
+        # 批量向量化并创建向量库
+        self.logger.info("开始批量向量化 %d 个项目（文本+图片）...", len(all_docs))
+        self.vectorstore = FAISS.from_documents(all_docs, self.embeddings)
+        self.retriever = self.vectorstore.as_retriever(search_kwargs={"k": 3})
 
-        if all_chunks:
-            self.vectorstore = FAISS.from_documents(all_chunks, self.embeddings)
-            self.retriever = self.vectorstore.as_retriever(search_kwargs={"k": 3})
-            vs_dir = self._get_combined_vectorstore_dir()
-            os.makedirs(vs_dir, exist_ok=True)
-            self.vectorstore.save_local(vs_dir)
-            self.logger.info("向量库重建完成，共 %d 个文档文件", len(doc_files))
-            if image_files:
-                self.logger.info("另有 %d 张图片（未参与向量化）", len(image_files))
+        # 保存
+        vs_dir = self._get_combined_vectorstore_dir()
+        os.makedirs(vs_dir, exist_ok=True)
+        self.vectorstore.save_local(vs_dir)
+        self.logger.info("✓ 向量库重建完成并保存到: %s", vs_dir)
 
     def add_document(self, file_path: str):
         self.logger.info("正在处理文档: %s", file_path)
@@ -236,15 +339,26 @@ class RAGModule:
             raise
 
     def add_image(self, image_path: str):
-        """
-        添加图片到知识库（图片向量化功能待扩展）
-        
-        Args:
-            image_path: 图片文件路径
-        """
-        self.logger.info("图片已保存到知识库: %s（图片向量化功能待扩展）", image_path)
-        # 暂时只记录日志，不进行向量化
-        # 后续可以添加 OCR 或图片描述生成功能
+        """添加图片到知识库并向量化"""
+        self.logger.info("正在处理图片: %s", image_path)
+        try:
+            doc = Document(page_content=f"image://{image_path}", metadata={"source": image_path, "type": "image"})
+
+            if self.vectorstore is None:
+                self.logger.info("创建新向量库...")
+                self.vectorstore = FAISS.from_documents([doc], self.embeddings)
+                self.retriever = self.vectorstore.as_retriever(search_kwargs={"k": 3})
+            else:
+                self.logger.info("添加到现有向量库...")
+                self.vectorstore.add_documents([doc])
+
+            vs_dir = self._get_combined_vectorstore_dir()
+            os.makedirs(vs_dir, exist_ok=True)
+            self.vectorstore.save_local(vs_dir)
+            self.logger.info("图片向量已添加并保存到: %s", vs_dir)
+        except Exception as e:
+            self.logger.error("添加图片失败: %s", e)
+            raise
 
     def query(self, question: str = "", image_path: str = None) -> Tuple[str, Dict, List[Dict]]:
         """
@@ -263,47 +377,175 @@ class RAGModule:
         if not question.strip() and not image_path:
             return "问题不能为空。", timings, []
         
-        # 图片处理（暂时只记录日志，保留后续扩展）
-        if image_path:
-            if os.path.exists(image_path):
-                self.logger.info("收到图片: %s（图片处理功能待扩展）", image_path)
-            else:
-                self.logger.warning("图片路径不存在: %s", image_path)
-        
-        # 如果只有图片没有文字，返回提示
-        if not question.strip() and image_path:
-            return "当前仅支持文字查询，图片功能待扩展。", timings, []
-        
         if not self.retriever:
             return "知识库为空，请先上传文档。", timings, []
         
-        self.logger.info("用户问题: %s", question if question.strip() else "[无文字，仅图片]")
+        self.logger.info("用户问题: %s", question if question.strip() else "[无文字]") 
         try:
             t0 = time.time()
-            docs_retrieved = self.retriever.invoke(question)
+            if image_path:
+                if not os.path.exists(image_path):
+                    return f"错误：图片路径不存在 {image_path}", timings, []
+                query_vector = self.embeddings.embed_image(image_path)
+                docs_retrieved = self.vectorstore.similarity_search_by_vector(query_vector, k=3)
+                # 如果有文字，拼接到提示词
+                if question.strip():
+                    question = f"结合图片内容回答：{question}"
+                else:
+                    question = "描述这张图片的内容。"
+            else:
+                docs_retrieved = self.retriever.invoke(question)
             timings["retrieval"] = time.time() - t0
-            context = "\n\n".join(d.page_content for d in docs_retrieved)
-            prompt = (
-                "你是一个中文助理，请严格依据下面提供的知识库内容回答用户问题，"
-                "如果知识库中没有相关信息，就说不知道，不要编造，也不要扩展。\n\n"
-                f"【知识库内容】:\n{context}\n\n"
-                f"【用户问题】:\n{question}\n\n"
-                "请用简体中文回答："
-            )
-            self.logger.info("正在生成回答...")
-            t0 = time.time()
-            response = self.llm.invoke(prompt)
-            timings["llm_generation"] = time.time() - t0
-            answer = response.content
-            self.logger.info("回答生成完成")
+            def _fmt_content(doc: Document):
+                if isinstance(doc.page_content, str) and doc.page_content.startswith("image://"):
+                    return f"图片路径: {doc.page_content[len('image://'):]}"
+                return doc.page_content
+
+            context = "\n\n".join(_fmt_content(d) for d in docs_retrieved)
+
+            # 收集命中图片，准备多模态输入
+            image_paths = [
+                doc.metadata.get("source")
+                for doc in docs_retrieved
+                if isinstance(doc.page_content, str)
+                and doc.page_content.startswith("image://")
+                and doc.metadata.get("type") == "image"
+                and doc.metadata.get("source")
+            ]
+
+            answer = ""
             sources = [
-                {"content": doc.page_content, "source": os.path.basename(doc.metadata.get("source", "未知来源"))}
+                {
+                    "content": _fmt_content(doc),
+                    "source": os.path.basename(doc.metadata.get("source", "未知来源")),
+                    "type": doc.metadata.get("type", "text"),
+                }
                 for doc in docs_retrieved
             ]
+
+            use_vision = bool(image_paths) and self.llm_config[self.current_model_type].get("supports_vision", False)
+
+            if use_vision:
+                try:
+                    vision_payload = self._build_vision_payload(question, context, image_paths)
+                    self.logger.info("正在生成回答（图文）...")
+                    t0 = time.time()
+                    answer = self._invoke_vision(vision_payload)
+                    timings["llm_generation"] = time.time() - t0
+                    self.logger.info("回答生成完成（图文）")
+                except Exception as e:
+                    self.logger.warning("多模态调用失败，将回退文本：%s", e)
+                    use_vision = False
+
+            if not use_vision:
+                prompt = (
+                    "你是一个中文助理，请严格依据下面提供的知识库内容回答用户问题，"
+                    "如果知识库中没有相关信息，就说不知道，不要编造，也不要扩展。\n\n"
+                    f"【知识库内容】:\n{context}\n\n"
+                    f"【用户问题】:\n{question}\n\n"
+                    "请用简体中文回答："
+                )
+                self.logger.info("正在生成回答（文本）...")
+                t0 = time.time()
+                response = self.llm.invoke(prompt)
+                timings["llm_generation"] = time.time() - t0
+                answer = response.content
+                self.logger.info("回答生成完成（文本）")
+
             return answer, timings, sources
         except Exception as e:
             self.logger.error("RAG 查询失败: %s", e)
             return f"抱歉，生成回答时出现错误: {str(e)}", timings, []
+
+    # --- 多模态生成 ---
+    def _build_vision_payload(self, question: str, context: str, image_paths: List[str]) -> Dict[str, Any]:
+        """
+        将文本与图片封装为 OpenAI 风格的多模态消息，适配本地 llama.cpp server。
+        """
+        # 限制图片数量与大小（简单限制）
+        max_imgs = 3
+        items = []
+        for path in image_paths[:max_imgs]:
+            try:
+                p = Path(path)
+                if not p.exists() or not p.is_file():
+                    self.logger.warning("图片不存在，跳过: %s", path)
+                    continue
+                data = p.read_bytes()
+                if len(data) > 5 * 1024 * 1024:  # 5MB 限制
+                    self.logger.warning("图片过大(>5MB)，跳过: %s", path)
+                    continue
+                b64 = base64.b64encode(data).decode("utf-8")
+                mime = "image/png"
+                if path.lower().endswith((".jpg", ".jpeg")):
+                    mime = "image/jpeg"
+                elif path.lower().endswith(".webp"):
+                    mime = "image/webp"
+                items.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{mime};base64,{b64}"},
+                    }
+                )
+            except Exception as e:
+                self.logger.warning("读取图片失败，跳过 %s，原因: %s", path, e)
+
+        text_parts = [
+            {
+                "type": "text",
+                "text": (
+                    "你是一个中文助理，请根据提供的知识库文本和图片回答用户问题。"
+                    "如果缺少相关信息，就直接回答不知道。"
+                ),
+            },
+            {"type": "text", "text": f"【知识库文本】:\n{context}"},
+            {"type": "text", "text": f"【用户问题】:\n{question}"},
+        ]
+
+        # 将文本与图片一起作为 user 消息内容
+        user_content = text_parts + items
+
+        config = self.llm_config[self.current_model_type]
+        payload = {
+            "model": config["model_name"],
+            "messages": [
+                {"role": "system", "content": "你是一个仅依据给定内容回答的中文助手。"},
+                {"role": "user", "content": user_content},
+            ],
+            "temperature": 0.01,
+            "max_tokens": 512,
+        }
+        return payload
+
+    def _invoke_vision(self, payload: Dict[str, Any]) -> str:
+        """
+        调用本地 llama.cpp 兼容的 /v1/chat/completions 接口，支持图文。
+        """
+        config = self.llm_config[self.current_model_type]
+        # 清理掉误入的 fragment（可能带 #）
+        api_base = config["api_base"].split("#")[0].rstrip("/")
+        api_key = config.get("api_key") or ""
+        url = f"{api_base}/v1/chat/completions"
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        with httpx.Client(timeout=120) as client:
+            resp = client.post(url, headers=headers, json=payload)
+            resp.raise_for_status()
+            data = resp.json()
+            # OpenAI 格式
+            choices = data.get("choices")
+            if not choices:
+                raise ValueError("响应无 choices")
+            message = choices[0].get("message", {})
+            content = message.get("content")
+            if not content:
+                raise ValueError("响应无 content")
+            if isinstance(content, list):
+                # content 也可能是多段结构，拼接文本部分
+                content = "".join([c.get("text", "") if isinstance(c, dict) else str(c) for c in content])
+            return content
 
     def text_to_speech(self, text: str):
         try:
