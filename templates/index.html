@@ -220,6 +220,20 @@
         .hidden {
             display: none;
         }
+        /* 精简对话UI：麦克风悬浮按钮与动效 */
+        .mic-fab { position: fixed; left:50%; bottom: 28px; transform: translateX(-50%); z-index: 1000; display: flex; align-items:center; justify-content:center; }
+        .mic-fab .pulse { position:absolute; width:84px; height:84px; border-radius:50%; background: rgba(76, 175, 80, 0.15); animation: pulse 2s ease-out infinite; opacity:0; }
+        .mic-fab.active .pulse { opacity:1; }
+        .mic-fab button { width:64px; height:64px; border-radius:50%; border:none; background:#4CAF50; color:#fff; font-size:24px; box-shadow:0 8px 24px rgba(76,175,80,.4); cursor:pointer; }
+        .mic-fab button.stop { background:#f44336; box-shadow:0 8px 24px rgba(244,67,54,.4); }
+        @keyframes pulse { 0%{ transform: scale(0.9); opacity:.6;} 70%{ transform: scale(1.2); opacity:.2;} 100%{ transform: scale(1.4); opacity:0;} }
+        /* 语音动效（用户说话/AI说话）*/
+        .equalizer { display:flex; gap:3px; align-items:flex-end; height:22px; }
+        .equalizer span { width:3px; background:#4CAF50; display:block; border-radius:2px; height:8px; transition: height .08s linear; }
+        #assistantSpeaking { position: fixed; right: 18px; bottom: 32px; background: rgba(0,0,0,.7); color:#fff; border-radius:12px; padding:8px 10px; display:flex; align-items:center; gap:8px; z-index:1000; }
+        /* 一键隐藏复杂模块（但不删除） */
+        #recognitionResult{ display:none !important; }
+        #btnClear{ display:none !important; }
     </style>
 </head>
 <body>
@@ -266,7 +280,7 @@
             </div>
         </div>
 
-        <div class="result-section" style="margin-top:15px; display: flex; gap: 10px;">
+        <div class="result-section" style="margin-top:15px; display:none; gap: 10px;">
             <input type="text" id="textInput" placeholder="或者在这里输入文字提问..." style="flex: 1; padding: 10px; border-radius: 5px; border: 1px solid #ddd;">
             <button id="btnSend" class="btn-record" style="padding: 10px 20px;">发送</button>
         </div>
@@ -325,6 +339,19 @@
         </div>
     </div>
 
+    <!-- 悬浮麦克风按钮（语音对话主入口） -->
+    <div id="micFab" class="mic-fab">
+        <div class="pulse"></div>
+        <button id="micFabBtn" title="按下开始/停止监听">🎤</button>
+    </div>
+    <!-- AI 说话动效（TTS 播放时显示） -->
+    <div id="assistantSpeaking" style="display:none;">
+        <div class="equalizer" id="assistantEq">
+            <span></span><span></span><span></span><span></span><span></span>
+        </div>
+        <div style="font-size:12px; opacity:.9;">AI 说话中...</div>
+    </div>
+
     <script>
 
         let lastAsrTime = 0; // 存储最后一次 ASR 耗时
@@ -351,6 +378,56 @@
         const recognitionResult = document.getElementById('recognitionResult');
         let recognizedTextDiv = document.getElementById('recognizedText');
         const recognitionMeta = document.getElementById('recognitionMeta');
+
+        // ======= 精简语音对话 UI：麦克风悬浮按钮 + AI 说话动效 =======
+        const micFab = document.getElementById('micFab');
+        const micFabBtn = document.getElementById('micFabBtn');
+        const assistantSpeaking = document.getElementById('assistantSpeaking');
+        const assistantEq = document.getElementById('assistantEq');
+        let eqTimer = null;
+        function setMicFabActive(active){
+            if (active) {
+                micFab.classList.add('active');
+                micFabBtn.classList.add('stop');
+                micFabBtn.textContent = '⏹️';
+            } else {
+                micFab.classList.remove('active');
+                micFabBtn.classList.remove('stop');
+                micFabBtn.textContent = '🎤';
+            }
+        }
+        function startAssistantEq(){
+            assistantSpeaking.style.display = 'flex';
+            const bars = assistantEq ? assistantEq.querySelectorAll('span') : [];
+            if (eqTimer) clearInterval(eqTimer);
+            eqTimer = setInterval(()=>{
+                bars.forEach((b,i)=>{ b.style.height = (6 + Math.random()*16) + 'px'; });
+            }, 80);
+        }
+        function stopAssistantEq(){
+            if (eqTimer) { clearInterval(eqTimer); eqTimer = null; }
+            const bars = assistantEq ? assistantEq.querySelectorAll('span') : [];
+            bars.forEach(b=> b.style.height='8px');
+            assistantSpeaking.style.display = 'none';
+        }
+        micFabBtn.addEventListener('click', async ()=>{
+            if (!micEnabled) {
+                // 触发现有“启用监听”流程
+                const btn = document.getElementById('btnWakeEnableMic');
+                if (btn) btn.click();
+                setMicFabActive(true);
+            } else {
+                // 停止监听，隐藏动效
+                if (typeof stopMicAndStream === 'function') {
+                    await stopMicAndStream('已关闭监听');
+                }
+                setMicFabActive(false);
+                if (btnWakeBypass) btnWakeBypass.style.display = 'none';
+            }
+        });
+        // 初始化FAB外观
+        setMicFabActive(false);
+        // ======= 结束：精简语音对话 UI =======
 
         // 加载当前模型设置
         async function loadModelSettings() {
@@ -959,6 +1036,14 @@
         // 显示结果
         function displayResult(recognizedText, answer, audioData, timings, sources, audioId) {
             const resultDiv = document.createElement('div');
+
+            // 如果有上一次AI语音正在播放，先停止它，避免多路播放
+            if (window._currentTtsAudio) {
+                try { window._currentTtsAudio.pause(); } catch(_){}
+                try { window._currentTtsAudio.currentTime = 0; } catch(_){}
+                stopAssistantEq && stopAssistantEq();
+                window._currentTtsAudio = null;
+            }
             
             let audioHTML = '';
             if (audioData) {
@@ -1028,6 +1113,12 @@
             if (audioData) {
                 const audio = resultDiv.querySelector('audio');
                 if (audio) {
+                    // 记录当前TTS音频，确保新回答到来时能关闭上一个
+                    window._currentTtsAudio = audio;
+                    // 绑定 AI 说话动效
+                    audio.addEventListener('play', startAssistantEq);
+                    audio.addEventListener('ended', () => { stopAssistantEq(); if (window._currentTtsAudio===audio) window._currentTtsAudio=null; });
+                    audio.addEventListener('pause', () => { stopAssistantEq(); if (window._currentTtsAudio===audio) window._currentTtsAudio=null; });
                     audio.play().catch(e => {
                         console.log('自动播放被阻止，用户需要手动点击播放');
                     });
@@ -1051,6 +1142,7 @@
         let wsConnected = false;
         let wsInitSent = false;
         let wsAutoReconnect = false;
+        let wsResetting = false; // 重启WS过程中，抑制“连接已关闭”等状态提示
         let audioCtx = null;
         let processor = null;
         let micStream = null;
@@ -1061,14 +1153,46 @@
         let sentChunks = 0;        // 已发送的音频包计数
         let micEnabled = false;    // 是否已启用监听
         let silenceAccumMs = 0;    // 连续静音累计时长(ms)
+        let hasWoken = false;      // 本轮是否已被唤醒（仅唤醒后才触发静音回退）
+        let silenceGuardUntil = 0; // 唤醒后的静音保护期（毫秒时间戳）
 
         const wakeWordInput = document.getElementById('wakeWordInput');
 
         const btnWakeBypass = document.getElementById('btnWakeBypass');
+// 初始隐藏“跳过唤醒词”按钮，启用监听后再显示
+if (btnWakeBypass) btnWakeBypass.style.display = 'none';
+let autoSendTimer = null;
+let autoSendInFlight = false;
+let lastPartialText = '';
+
+// 将识别出的语音文本直接发送给大模型（跳过输入框）
+async function sendRecognizedToLLM(text) {
+    const payload = { text: text, audio_id: null };
+    try {
+        updateUI('processing');
+        const resp = await fetch('/api/text_chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const data = await resp.json();
+        if (data && data.success) {
+            displayResult(text, data.answer, data.audio, data.timings, data.sources, data.audio_id);
+        } else {
+            showError(data && data.error ? data.error : '处理失败，请重试');
+        }
+    } catch (e) {
+        showError('发送识别文本时出错: ' + e.message);
+    } finally {
+        updateUI(micEnabled && hasWoken ? 'recording' : 'idle');
+    }
+}
+
         const btnWakeEnableMic = document.getElementById('btnWakeEnableMic');
         const wakeStatus = document.getElementById('wakeStatus');
-        const SILENCE_TIMEOUT_MS = 15000; // 连续静音超时自动关闭监听
+        const SILENCE_TIMEOUT_MS = 15000; // 连续静音超时自动回到唤醒
         const SILENCE_ABS_THRESH = 400;   // Int16 平均绝对幅度阈值（经验值）
+        const SILENCE_GUARD_MS = 1500;    // 唤醒后的静音保护时长（避免一唤醒就被误判静音）
 
         function wsUrl() {
             const scheme = location.protocol === 'https:' ? 'wss://' : 'ws://';
@@ -1131,12 +1255,24 @@
                         if (msg.event === 'wake_listening') {
                             setWakeStatus(`监听中：${msg.wake_word || wakeWordInput.value}`);
                             updateUI('idle');
+                            // 回到等待唤醒状态
+                            hasWoken = false;
+                            setMicFabActive(false);
                         } else if (msg.event === 'wake_word_detected') {
                             setWakeStatus('已唤醒，开始识别...');
                             updateUI('recording');
+                            // 用户说话阶段：开启录音动效
+                            hasWoken = true;
+                            silenceAccumMs = 0;
+                            silenceGuardUntil = Date.now() + SILENCE_GUARD_MS;
+                            setMicFabActive(true);
                         } else if (msg.event === 'wake_word_bypassed') {
                             setWakeStatus('已跳过唤醒词，直接识别中...');
                             updateUI('recording');
+                            hasWoken = true;
+                            silenceAccumMs = 0;
+                            silenceGuardUntil = Date.now() + SILENCE_GUARD_MS;
+                            setMicFabActive(true);
                         } else if (typeof msg.text === 'string') {
                             // 收到 ASR 文本（在线或离线）
                             lastRecognizedText = msg.text;
@@ -1144,7 +1280,30 @@
                             const conf = typeof msg.confidence === 'number' ? (msg.confidence * 100).toFixed(1) + '%' : '';
                             recognitionMeta.innerHTML = `${conf ? ('置信度: ' + conf) : ''}`;
                             recognitionResult.style.display = 'block';
-                            textInput.value = msg.text; // 同步到输入框
+                            textInput.value = msg.text; // 同步到输入框（隐藏态）
+
+                            // 每一次识别增量都视为活跃说话，重置唤醒计时（避免过早回退）
+                            if (msg.text && msg.text.trim().length > 0) {
+                                hasWoken = true;
+                                silenceAccumMs = 0;
+                                silenceGuardUntil = Date.now() + SILENCE_GUARD_MS;
+                            }
+
+                            // 自动发送到大模型：对识别文本做防抖，避免频繁请求
+                            if (msg.text && msg.text.trim().length > 0) {
+                                lastPartialText = msg.text.trim();
+                                if (autoSendTimer) clearTimeout(autoSendTimer);
+                                autoSendTimer = setTimeout(() => {
+                                    if (!autoSendInFlight && lastPartialText.length > 0) {
+                                        autoSendInFlight = true;
+                                        sendRecognizedToLLM(lastPartialText).finally(() => {
+                                            autoSendInFlight = false;
+                                            lastPartialText = '';
+                                        });
+                                    }
+                                }, 800); // 800ms 无增量则触发发送
+                            }
+
                             // 若识别文本为空，回到监听态
                             if (!msg.text) {
                                 updateUI('idle');
@@ -1158,6 +1317,8 @@
 
             ws.onclose = () => {
                 wsConnected = false;
+                // 如果是我们主动的重启流程，不要抛出“连接已关闭”的提示
+                if (wsResetting) return;
                 if (wsAutoReconnect) {
                     setWakeStatus('连接断开，重试中...');
                     setTimeout(initWebSocket, 1500);
@@ -1233,18 +1394,26 @@
                     const input = e.inputBuffer.getChannelData(0);
                     const resampled = resampleTo16k(input, audioCtx.sampleRate);
                     const int16 = floatToPCM16Int16Array(resampled);
-                    // 静音检测：统计当前帧平均绝对幅度
+                    // 静音检测：统计当前帧平均绝对幅度（含唤醒后保护期）
                     let absSum = 0;
                     for (let i = 0; i < int16.length; i++) { absSum += Math.abs(int16[i]); }
                     const absAvg = int16.length ? (absSum / int16.length) : 0;
                     const CHUNK = 960; // 约 60ms@16k
-                    if (absAvg < SILENCE_ABS_THRESH) {
-                        silenceAccumMs += Math.round(int16.length / 16); // int16.length/16000 秒 -> ms（近似）
+                    const nowTs = Date.now();
+                    const guardActive = hasWoken && nowTs < (silenceGuardUntil || 0);
+                    if (!guardActive) {
+                        if (absAvg < SILENCE_ABS_THRESH) {
+                            silenceAccumMs += Math.round(int16.length / 16); // int16.length/16000 秒 -> ms（近似）
+                        } else {
+                            // 有声音直接清零，等效“续期”
+                            silenceAccumMs = 0;
+                        }
                     } else {
+                        // 唤醒后短保护期内不累计静音，避免“刚唤醒就回退”
                         silenceAccumMs = 0;
                     }
-                    if (silenceAccumMs >= SILENCE_TIMEOUT_MS) {
-                        // 自动返回唤醒监听：重置会话到KWS监听，不显示录音
+                    if (hasWoken && !guardActive && silenceAccumMs >= SILENCE_TIMEOUT_MS) {
+                        // 仅在已唤醒且非保护期内才回到唤醒监听
                         resetToWakeListening('长时间静音，已返回唤醒监听');
                         return;
                     }
@@ -1253,7 +1422,7 @@
                     while (pendingPCM.length >= CHUNK) {
                         const chunk = pendingPCM.slice(0, CHUNK);
                         pendingPCM = pendingPCM.slice(CHUNK);
-                        try { ws.send(chunk.buffer); sentChunks++; if (sentChunks % 10 === 0) { setWakeStatus(`已发送音频包：${sentChunks}`); } } catch (_) { /* noop */ }
+                        try { ws.send(chunk.buffer); sentChunks++; } catch (_) { /* noop */ }
                     }
                 };
 
@@ -1297,34 +1466,56 @@
                 wsAutoReconnect = false;
                 if (ws) { try { ws.close(); } catch (_) {} ws = null; }
                 updateUI('idle');
+                setMicFabActive(false);
                 if (reasonText) setWakeStatus(reasonText);
             }
         }
 
-        // 静音超时后回到唤醒监听：重置WS会话并进入监听态，但不显示“正在录音”
+        // 静音超时后回到唤醒监听：仅重启 WebSocket，会保留麦克风采集
         async function resetToWakeListening(reasonText){
-            // 1) 完整停止当前识别链路（会关闭WS）
-            await stopMicAndStream(reasonText || '已返回唤醒监听');
-            // 2) 重新建立WS会话
-            wsAutoReconnect = true;
-            initWebSocket();
-            const ok = await waitWsOpen(4000);
-            if(!ok){ setWakeStatus('连接后端失败，请重试'); return; }
-            // 3) 重发唤醒词并开启监听门控
-            const ww=(wakeWordInput.value||'').trim();
-            if(ww) sendCtrl({ wake_word: ww });
-            sendCtrl({ wake_word_enabled: true, is_speaking: true });
-            // 4) 重新启动本地推流
-            await startMicAndStream();
-            micEnabled = true;
-            btnWakeEnableMic.textContent = '⏹️ 关闭监听';
-            btnWakeEnableMic.style.background = '#f44336';
-            // 5) UI 显示为“空闲”（不显示录音动画），等待后端发出 wake_listening 事件
-            updateUI('idle');
-            setWakeStatus('已返回唤醒监听，等待唤醒词...');
+            try{
+                hasWoken = false;
+                wsResetting = true;
+                // 1) 关闭并重建 WS，会话清零
+                if (ws) { try { ws.close(); } catch(_){} ws = null; }
+                wsAutoReconnect = false;
+                initWebSocket();
+                const ok = await waitWsOpen(4000);
+                if(!ok){ wsResetting=false; setWakeStatus('连接后端失败，请重试'); return; }
+                // 2) 重新下发唤醒词并开启门控
+                const ww=(wakeWordInput.value||'').trim();
+                if(ww) sendCtrl({ wake_word: ww });
+                sendCtrl({ wake_word_enabled: true, is_speaking: true });
+                // 3) 不停止本地麦克风采集，保持 processor/micStream 不变
+                // 4) UI 切为“空闲”（不显示录音动画），并直接提示监听中
+                setMicFabActive(false);
+                updateUI('idle');
+                setWakeStatus(`监听中：${ww || wakeWordInput.value || ''}`);
+            }catch(e){ console.warn('resetToWakeListening error', e); }
+            finally{ wsResetting = false; }
         }
 
-        // 跳过唤醒词
+        // 软重置：仅回到唤醒监听，不重启WebSocket、不停止麦克风
+async function softResetToWakeListening(reasonText){
+    try{
+        // 清理前端计数与缓存，但保留ws/mic
+        silenceAccumMs = 0;
+        pendingPCM = new Int16Array(0);
+        sentChunks = 0;
+        // 通知服务端结束本次讲话，清理缓存
+        sendCtrl({ is_speaking: false });
+        // 重新下发唤醒词与开启监听门控
+        const ww=(wakeWordInput.value||'').trim();
+        if(ww) sendCtrl({ wake_word: ww });
+        sendCtrl({ wake_word_enabled: true, is_speaking: true });
+        // UI 切为“空闲”，不显示录音动画
+        setMicFabActive(false);
+        updateUI('idle');
+        if (reasonText) setWakeStatus(reasonText); else setWakeStatus('已返回唤醒监听，等待唤醒词...');
+    }catch(e){ console.warn('softResetToWakeListening error', e); }
+}
+
+// 跳过唤醒词
         btnWakeBypass.addEventListener('click', () => {
             wakeBypassed = true;
             sendCtrl({ wake_word_bypass: true });
@@ -1355,6 +1546,7 @@
                 btnWakeEnableMic.textContent = '⏹️ 关闭监听';
                 btnWakeEnableMic.style.background = '#f44336';
                 setWakeStatus('麦克风已启用，正在监听唤醒词...');
+                if (btnWakeBypass) btnWakeBypass.style.display = 'inline-block';
             } else {
                 await stopMicAndStream('已关闭监听');
             }

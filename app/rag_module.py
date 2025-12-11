@@ -227,13 +227,14 @@ class RAGModule:
             docs_retrieved = self.retriever.invoke(question)
             timings["retrieval"] = time.time() - t0
             context = "\n\n".join(d.page_content for d in docs_retrieved)
-            prompt = (
-                "你是一个中文助理，请严格依据下面提供的知识库内容回答用户问题，"
-                "如果知识库中没有相关信息，就说不知道，不要编造，也不要扩展。\n\n"
-                f"【知识库内容】:\n{context}\n\n"
-                f"【用户问题】:\n{question}\n\n"
-                "请用简体中文回答："
-            )
+            # prompt = (
+            #     "你是一个中文助理，请严格依据下面提供的知识库内容回答用户问题，"
+            #     "如果知识库中没有相关信息，就说不知道，不要编造，也不要扩展。\n\n"
+            #     f"【知识库内容】:\n{context}\n\n"
+            #     f"【用户问题】:\n{question}\n\n"
+            #     "请用简体中文回答："
+            # )
+            prompt = question
             self.logger.info("正在生成回答...")
             t0 = time.time()
             response = self.llm.invoke(prompt)
