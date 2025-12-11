@@ -23,8 +23,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Flask 应用
-app = Flask(__name__)
+# Flask 应用（显式指定模板与静态目录，避免因包目录变化找不到模板）
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.dirname(APP_DIR)
+TEMPLATE_DIR = os.path.join(ROOT_DIR, "templates")
+STATIC_DIR = os.path.join(ROOT_DIR, "static")
+app = Flask(__name__, template_folder=TEMPLATE_DIR, static_folder=STATIC_DIR)
 
 
 @app.after_request
@@ -411,10 +415,10 @@ def main():
     print("\n" + "=" * 60)
     print("Web 语音 RAG 系统已启动！")
     print("=" * 60)
-    print("请在浏览器中打开: http://localhost:5000")
+    print("请在浏览器中打开: http://localhost:7000")
     print("按 Ctrl+C 退出程序")
     print("=" * 60 + "\n")
-    app.run(host="0.0.0.0", port=5000, debug=debug_mode)
+    app.run(host="0.0.0.0", port=7000, debug=debug_mode)
 
 
 if __name__ == "__main__":

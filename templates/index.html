@@ -230,9 +230,20 @@
         <div id="status" class="status idle">准备就绪</div>
 
         <div class="controls">
-            <button id="btnRecord" class="btn-record">🎤 开始录音</button>
-            <button id="btnStop" class="btn-stop" disabled>⏹️ 停止录音</button>
             <button id="btnClear" class="btn-clear">🗑️ 清空记录</button>
+        </div>
+
+        <!-- 唤醒词控制区 -->
+        <div class="result-section" style="margin-top:15px;">
+            <h3>唤醒词</h3>
+            <div style="display:flex; gap:10px; align-items:center; flex-wrap: wrap; margin-top:10px;">
+                <label for="wakeWordInput">关键词：</label>
+                <input id="wakeWordInput" type="text" value="小云小云" style="padding:8px; border-radius:6px; border:1px solid #ddd; min-width: 160px;" />
+                <button id="btnWakeEnableMic" class="btn-record" style="background:#2196F3;">🎤 启用监听</button>
+                <button id="btnWakeBypass" class="btn-stop">⏭️ 跳过唤醒词</button>
+                <span id="wakeStatus" style="font-size:0.9em; color:#666;">初始化中...</span>
+            </div>
+            <div style="font-size:0.85em; color:#888; margin-top:6px;">点击“启用监听”开启麦克风采集并在本地推流，后端仅在检测到唤醒词后才进入识别。也可点击“跳过唤醒词”直接开始识别。</div>
         </div>
 
         <!-- 语音识别结果区域 -->
@@ -312,18 +323,14 @@
     </div>
 
     <script>
-        let mediaRecorder = null;
-        let audioChunks = [];
-        let isRecording = false;
-        let stream = null;
+
         let lastAsrTime = 0; // 存储最后一次 ASR 耗时
         let lastAudioId = null; // 存储最后一次识别的 audio_id
         let lastRecognizedText = ''; // 存储最后一次识别的文本
         let lastConfidence = 0; // 存储最后一次识别的置信度
         let lastAudioBase64 = null; // 存储最后一次录音的 base64 数据（延迟保存）
 
-        const btnRecord = document.getElementById('btnRecord');
-        const btnStop = document.getElementById('btnStop');
+
         const btnClear = document.getElementById('btnClear');
         const btnUpload = document.getElementById('btnUpload');
         const btnCorrect = document.getElementById('btnCorrect');
@@ -427,7 +434,7 @@
                             <div style="font-weight: 500; color: #333;">${file.name}</div>
                             <div style="font-size: 0.8em; color: #999;">${date} · ${size}</div>
                         </div>
-                        <button onclick="deleteFile('${file.name}')" style="padding: 5px 10px; font-size: 12px; background: #ff5252; color: white; border: none; border-radius: 5px; cursor: pointer;">删除</button>
+                        <button onclick="deleteFile(this, '${file.name}')" style="padding: 5px 10px; font-size: 12px; background: #ff5252; color: white; border: none; border-radius: 5px; cursor: pointer;">删除</button>
                     </li>
                 `;
             });
@@ -436,14 +443,13 @@
         }
 
         // 删除文件
-        window.deleteFile = async function(filename) {
+        window.deleteFile = async function(btn, filename) {
             if (!confirm(`确定要删除文件 "${filename}" 吗？这将重建知识库，可能需要一点时间。`)) {
                 return;
             }
 
             try {
                 // 显示加载状态
-                const btn = event.target;
                 const originalText = btn.textContent;
                 btn.textContent = '删除中...';
                 btn.disabled = true;
@@ -459,9 +465,8 @@
                 const data = await response.json();
                 
                 if (data.success) {
-                    // 重新加载列表
                     await loadFiles();
-                    showError('文件已删除，知识库已更新'); // 借用 showError 显示提示，虽然它是红色的
+                    showError('文件已删除，知识库已更新');
                 } else {
                     alert('删除失败: ' + (data.error || '未知错误'));
                     btn.textContent = originalText;
@@ -470,6 +475,8 @@
             } catch (error) {
                 console.error('删除文件失败:', error);
                 alert('删除出错: ' + error.message);
+                btn.textContent = '删除';
+                btn.disabled = false;
             }
         };
 
@@ -717,51 +724,6 @@
         btnCorrect.onclick = enterEditMode;
         btnAccept.onclick = acceptRecognition;
 
-        // 开始录音
-        btnRecord.addEventListener('click', async () => {
-            try {
-                stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                mediaRecorder = new MediaRecorder(stream, {
-                    mimeType: 'audio/webm;codecs=opus'
-                });
-
-                audioChunks = [];
-
-                mediaRecorder.ondataavailable = (event) => {
-                    if (event.data.size > 0) {
-                        audioChunks.push(event.data);
-                    }
-                };
-
-                mediaRecorder.onstop = async () => {
-                    await processAudio();
-                };
-
-                mediaRecorder.start();
-                isRecording = true;
-                updateUI('recording');
-                
-            } catch (error) {
-                console.error('无法访问麦克风:', error);
-                showError('无法访问麦克风，请检查权限设置');
-            }
-        });
-
-        // 停止录音
-        btnStop.addEventListener('click', () => {
-            if (mediaRecorder && isRecording) {
-                mediaRecorder.stop();
-                isRecording = false;
-                
-                // 停止所有音频轨道
-                if (stream) {
-                    stream.getTracks().forEach(track => track.stop());
-                }
-                
-                updateUI('processing');
-            }
-        });
-
         // 清空记录
         btnClear.addEventListener('click', () => {
             results.innerHTML = '';
@@ -975,24 +937,17 @@
         // 更新 UI 状态
         function updateUI(state) {
             status.className = `status ${state}`;
-            
             switch(state) {
                 case 'idle':
                     status.textContent = '准备就绪';
-                    btnRecord.disabled = false;
-                    btnStop.disabled = true;
                     waveform.classList.add('hidden');
                     break;
                 case 'recording':
                     status.textContent = '正在录音...';
-                    btnRecord.disabled = true;
-                    btnStop.disabled = false;
                     waveform.classList.remove('hidden');
                     break;
                 case 'processing':
                     status.textContent = '正在处理';
-                    btnRecord.disabled = true;
-                    btnStop.disabled = true;
                     waveform.classList.add('hidden');
                     break;
             }
@@ -1088,6 +1043,338 @@
                 errorDiv.remove();
             }, 5000);
         }
+        // ===== 唤醒词 + WebSocket 实时流 =====
+        let ws = null;
+        let wsConnected = false;
+        let wsInitSent = false;
+        let wsAutoReconnect = false;
+        let audioCtx = null;
+        let processor = null;
+        let micStream = null;
+        // 待发送的 PCM16 缓冲，按 960 采样一包切片（与官方 demo 保持一致）
+        let pendingPCM = new Int16Array(0);
+
+        let wakeBypassed = false;  // 是否跳过唤醒词
+        let sentChunks = 0;        // 已发送的音频包计数
+        let micEnabled = false;    // 是否已启用监听
+        let silenceAccumMs = 0;    // 连续静音累计时长(ms)
+
+        const wakeWordInput = document.getElementById('wakeWordInput');
+
+        const btnWakeBypass = document.getElementById('btnWakeBypass');
+        const btnWakeEnableMic = document.getElementById('btnWakeEnableMic');
+        const wakeStatus = document.getElementById('wakeStatus');
+        const SILENCE_TIMEOUT_MS = 15000; // 连续静音超时自动关闭监听
+        const SILENCE_ABS_THRESH = 400;   // Int16 平均绝对幅度阈值（经验值）
+
+        function wsUrl() {
+            const scheme = location.protocol === 'https:' ? 'wss://' : 'ws://';
+            // 默认后端端口 10095
+            return scheme + location.hostname + ':10095';
+        }
+
+        function setWakeStatus(text) {
+            wakeStatus.textContent = text;
+        }
+
+
+
+        function sendCtrl(obj) {
+            if (ws && ws.readyState === 1) {
+                ws.send(JSON.stringify(obj));
+            }
+        }
+
+        function waitWsOpen(timeoutMs=4000){
+            return new Promise(resolve=>{
+                const start=Date.now();
+                const timer=setInterval(()=>{
+                    if(ws && ws.readyState===1){ clearInterval(timer); resolve(true); }
+                    else if(Date.now()-start>timeoutMs){ clearInterval(timer); resolve(false); }
+                },100);
+            });
+        }
+
+        function initWebSocket() {
+            if (ws && (ws.readyState === 0 || ws.readyState === 1)) return; // 正在连或已连
+            ws = new WebSocket(wsUrl(), 'binary');
+            // 与官方 demo 一致，强制以 ArrayBuffer 处理二进制
+            ws.binaryType = 'arraybuffer';
+
+            ws.onopen = async () => {
+                wsConnected = true;
+                setWakeStatus('已连接后端，请点击“启用监听”开始唤醒词监听');
+                // 发送初始控制配置（合并关键参数，避免后端取不到）
+                const initMsg = {
+                    mode: '2pass',
+                    chunk_size: [5, 10, 5],
+                    encoder_chunk_look_back: 4,
+                    decoder_chunk_look_back: 1,
+                    is_speaking: true,
+                    chunk_interval: 10,
+                    wav_name: 'web',
+                    wake_word: wakeWordInput.value.trim() || '小云小云',
+                    wake_word_enabled: false,
+                };
+                const hotwords = getHotwords();
+                if (hotwords) initMsg.hotwords = hotwords;
+                sendCtrl(initMsg);
+            };
+
+            ws.onmessage = (ev) => {
+                if (typeof ev.data === 'string') {
+                    try {
+                        const msg = JSON.parse(ev.data);
+                        if (msg.event === 'wake_listening') {
+                            setWakeStatus(`监听中：${msg.wake_word || wakeWordInput.value}`);
+                            updateUI('idle');
+                        } else if (msg.event === 'wake_word_detected') {
+                            setWakeStatus('已唤醒，开始识别...');
+                            updateUI('recording');
+                        } else if (msg.event === 'wake_word_bypassed') {
+                            setWakeStatus('已跳过唤醒词，直接识别中...');
+                            updateUI('recording');
+                        } else if (typeof msg.text === 'string') {
+                            // 收到 ASR 文本（在线或离线）
+                            lastRecognizedText = msg.text;
+                            recognizedTextDiv.textContent = msg.text;
+                            const conf = typeof msg.confidence === 'number' ? (msg.confidence * 100).toFixed(1) + '%' : '';
+                            recognitionMeta.innerHTML = `${conf ? ('置信度: ' + conf) : ''}`;
+                            recognitionResult.style.display = 'block';
+                            textInput.value = msg.text; // 同步到输入框
+                            // 若识别文本为空，回到监听态
+                            if (!msg.text) {
+                                updateUI('idle');
+                            }
+                        }
+                    } catch (e) {
+                        console.warn('WS 文本消息解析失败:', e, ev.data);
+                    }
+                }
+            };
+
+            ws.onclose = () => {
+                wsConnected = false;
+                if (wsAutoReconnect) {
+                    setWakeStatus('连接断开，重试中...');
+                    setTimeout(initWebSocket, 1500);
+                } else {
+                    setWakeStatus('连接已关闭');
+                }
+            };
+
+            ws.onerror = () => {
+                setWakeStatus('连接出错');
+            };
+        }
+
+        function floatToPCM16Int16Array(float32Array) {
+            const len = float32Array.length;
+            const out = new Int16Array(len);
+            for (let i = 0; i < len; i++) {
+                let s = Math.max(-1, Math.min(1, float32Array[i]));
+                out[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+            }
+            return out;
+        }
+        function concatInt16(a, b) {
+            if (!a || a.length === 0) return b;
+            if (!b || b.length === 0) return a;
+            const out = new Int16Array(a.length + b.length);
+            out.set(a, 0);
+            out.set(b, a.length);
+            return out;
+        }
+
+        function resampleTo16k(inputFloat32, inSampleRate) {
+            if (inSampleRate === 16000) return inputFloat32;
+            const sampleRateRatio = inSampleRate / 16000;
+            const newLength = Math.round(inputFloat32.length / sampleRateRatio);
+            const result = new Float32Array(newLength);
+            let offsetResult = 0;
+            let offsetBuffer = 0;
+            while (offsetResult < result.length) {
+                const nextOffsetBuffer = Math.round((offsetResult + 1) * sampleRateRatio);
+                // 简单平均法
+                let accum = 0, count = 0;
+                for (let i = offsetBuffer; i < nextOffsetBuffer && i < inputFloat32.length; i++) {
+                    accum += inputFloat32[i];
+                    count++;
+                }
+                result[offsetResult] = count > 0 ? (accum / count) : 0;
+                offsetResult++;
+                offsetBuffer = nextOffsetBuffer;
+            }
+            return result;
+        }
+
+        async function startMicAndStream() {
+            try {
+                if (!audioCtx) {
+                    const AC = window.AudioContext || window.webkitAudioContext;
+                    try { audioCtx = new AC({ sampleRate: 16000 }); }
+                    catch(_) { audioCtx = new AC(); }
+                } else if (audioCtx.state === 'suspended') {
+                    try { await audioCtx.resume(); } catch (_) {}
+                }
+                micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 } });
+                const source = audioCtx.createMediaStreamSource(micStream);
+                // 4096 帧，1 输入/输出通道
+                processor = audioCtx.createScriptProcessor(4096, 1, 1);
+                source.connect(processor);
+                processor.connect(audioCtx.destination);
+
+                processor.onaudioprocess = (e) => {
+                    if (!ws || ws.readyState !== 1) return;
+                    if (audioCtx.state === 'suspended') return; // 未激活则不处理
+                    const input = e.inputBuffer.getChannelData(0);
+                    const resampled = resampleTo16k(input, audioCtx.sampleRate);
+                    const int16 = floatToPCM16Int16Array(resampled);
+                    // 静音检测：统计当前帧平均绝对幅度
+                    let absSum = 0;
+                    for (let i = 0; i < int16.length; i++) { absSum += Math.abs(int16[i]); }
+                    const absAvg = int16.length ? (absSum / int16.length) : 0;
+                    const CHUNK = 960; // 约 60ms@16k
+                    if (absAvg < SILENCE_ABS_THRESH) {
+                        silenceAccumMs += Math.round(int16.length / 16); // int16.length/16000 秒 -> ms（近似）
+                    } else {
+                        silenceAccumMs = 0;
+                    }
+                    if (silenceAccumMs >= SILENCE_TIMEOUT_MS) {
+                        // 自动返回唤醒监听：重置会话到KWS监听，不显示录音
+                        resetToWakeListening('长时间静音，已返回唤醒监听');
+                        return;
+                    }
+                    // 累积并按 960 采样切片发送（与官方 demo 保持一致）
+                    pendingPCM = concatInt16(pendingPCM, int16);
+                    while (pendingPCM.length >= CHUNK) {
+                        const chunk = pendingPCM.slice(0, CHUNK);
+                        pendingPCM = pendingPCM.slice(CHUNK);
+                        try { ws.send(chunk.buffer); sentChunks++; if (sentChunks % 10 === 0) { setWakeStatus(`已发送音频包：${sentChunks}`); } } catch (_) { /* noop */ }
+                    }
+                };
+
+                
+                setWakeStatus('本地采集中，等待后端确认监听...');
+            } catch (err) {
+                console.error('麦克风初始化失败:', err);
+                showError('无法访问麦克风，请检查浏览器权限');
+                setWakeStatus('麦克风不可用');
+            }
+        }
+
+
+
+        async function stopMicAndStream(reasonText) {
+            try {
+                if (processor) {
+                    try { processor.disconnect(); } catch (_) {}
+                    processor.onaudioprocess = null;
+                    processor = null;
+                }
+                if (micStream) {
+                    try { micStream.getTracks().forEach(t => t.stop()); } catch (_) {}
+                    micStream = null;
+                }
+                // 可选：暂停音频上下文以节省资源
+                if (audioCtx && audioCtx.state !== 'suspended') {
+                    try { await audioCtx.suspend(); } catch (_) {}
+                }
+            } finally {
+                pendingPCM = new Int16Array(0);
+                silenceAccumMs = 0;
+                sentChunks = 0;
+                micEnabled = false;
+                wakeBypassed = false; // 重置旁路状态
+                btnWakeEnableMic.textContent = '🎤 启用监听';
+                btnWakeEnableMic.style.background = '#2196F3';
+                // 通知后端关闭唤醒监听
+                sendCtrl({ wake_word_enabled: false, is_speaking: false });
+                // 关闭并清理 WS，避免会话状态残留
+                wsAutoReconnect = false;
+                if (ws) { try { ws.close(); } catch (_) {} ws = null; }
+                updateUI('idle');
+                if (reasonText) setWakeStatus(reasonText);
+            }
+        }
+
+        // 静音超时后回到唤醒监听：重置WS会话并进入监听态，但不显示“正在录音”
+        async function resetToWakeListening(reasonText){
+            // 1) 完整停止当前识别链路（会关闭WS）
+            await stopMicAndStream(reasonText || '已返回唤醒监听');
+            // 2) 重新建立WS会话
+            wsAutoReconnect = true;
+            initWebSocket();
+            const ok = await waitWsOpen(4000);
+            if(!ok){ setWakeStatus('连接后端失败，请重试'); return; }
+            // 3) 重发唤醒词并开启监听门控
+            const ww=(wakeWordInput.value||'').trim();
+            if(ww) sendCtrl({ wake_word: ww });
+            sendCtrl({ wake_word_enabled: true, is_speaking: true });
+            // 4) 重新启动本地推流
+            await startMicAndStream();
+            micEnabled = true;
+            btnWakeEnableMic.textContent = '⏹️ 关闭监听';
+            btnWakeEnableMic.style.background = '#f44336';
+            // 5) UI 显示为“空闲”（不显示录音动画），等待后端发出 wake_listening 事件
+            updateUI('idle');
+            setWakeStatus('已返回唤醒监听，等待唤醒词...');
+        }
+
+        // 跳过唤醒词
+        btnWakeBypass.addEventListener('click', () => {
+            wakeBypassed = true;
+            sendCtrl({ wake_word_bypass: true });
+            
+            setWakeStatus('已跳过唤醒词，直接识别中...');
+        });
+
+        // 启用/关闭麦克风监听（按钮切换）
+        btnWakeEnableMic.addEventListener('click', async () => {
+            if (!micEnabled) {
+                // 重新建立 WS 会话，重置服务端状态
+                wsAutoReconnect = true;
+                initWebSocket();
+                const ok = await waitWsOpen(4000);
+                if (!ok) {
+                    setWakeStatus('连接后端失败，请重试');
+                    return;
+                }
+                // 重发唤醒词，确保以最新的词开始监听
+                const ww = (wakeWordInput.value || '').trim();
+                if (ww) sendCtrl({ wake_word: ww });
+                // 开启监听
+                sendCtrl({ wake_word_enabled: true, is_speaking: true });
+                // 再启动本地麦克风推流
+                await startMicAndStream();
+
+                micEnabled = true;
+                btnWakeEnableMic.textContent = '⏹️ 关闭监听';
+                btnWakeEnableMic.style.background = '#f44336';
+                setWakeStatus('麦克风已启用，正在监听唤醒词...');
+            } else {
+                await stopMicAndStream('已关闭监听');
+            }
+        });
+
+        // 修改唤醒词时，实时同步到后端
+        wakeWordInput.addEventListener('change', () => {
+            sendCtrl({ wake_word: wakeWordInput.value.trim() });
+        });
+
+        // 热词更改后，也同步给 WS 后端
+        document.getElementById('hotwordsInput').addEventListener('blur', () => {
+            const hotwords = getHotwords();
+            if (hotwords) sendCtrl({ hotwords });
+        });
+
+        // 页面加载即启动
+        (async () => {
+            
+            initWebSocket();
+            setWakeStatus('请点击“启用监听”开始麦克风采集');
+        })();
+        // ===== 结束：唤醒词 + WebSocket 实时流 =====
     </script>
 </body>
 </html>
