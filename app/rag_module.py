@@ -207,7 +207,6 @@ class RAGModule:
 
     def __init__(
         self,
-        kb_path: str,
         llm_api_base: str,
         llm_api_key: str,
         model_name: str,
@@ -237,7 +236,7 @@ class RAGModule:
         self.embeddings = self._init_embeddings()
         self.vectorstore = None
         self.retriever = None
-        self._init_vectorstore(kb_path)
+        self._init_vectorstore()
 
         # TTS
         self.tts_device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -298,7 +297,7 @@ class RAGModule:
         # 与新模型绑定，避免与旧向量库冲突
         return os.path.join(self.base_dir, "vectorstores", "combined_kb_bge_m3_visualized")
 
-    def _init_vectorstore(self, default_kb_path: str):
+    def _init_vectorstore(self):
         vs_dir = self._get_combined_vectorstore_dir()
         if os.path.exists(os.path.join(vs_dir, "index.faiss")):
             self.logger.info("检测到已保存的向量库，正在加载...")
@@ -317,14 +316,13 @@ class RAGModule:
             finally:
                 faiss_logger.setLevel(original_level)
 
-        if os.path.exists(default_kb_path):
-            self.logger.info("首次启动，从默认文件创建向量库: %s", os.path.basename(default_kb_path))
-            self.add_document(default_kb_path)
-        else:
-            self.logger.warning("未找到已保存的向量库，也未找到默认知识库文件")
-            self.logger.info("提示: 启动后可通过 Web 界面上传文档来创建知识库")
-            self.vectorstore = None
-            self.retriever = None
+        # 向量库不存在时，从 uploads 目录构建
+        documents_dir = os.path.join(self.base_dir, "uploads", "documents")
+        images_dir = os.path.join(self.base_dir, "uploads", "images")
+        self.logger.info("首次启动，从 uploads 目录构建向量库...")
+        self.logger.info("文档目录: %s", documents_dir)
+        self.logger.info("图片目录: %s", images_dir)
+        self.rebuild_vectorstore(documents_dir, images_dir)
 
     # --- 公共方法 ---
     def switch_llm(self, model_type: str):

@@ -490,7 +490,6 @@ def main():
                 collect_dialect_data=collect_dialect_data,
             )
             rag_module = RAGModule(
-                kb_path=KB_PATH,
                 llm_api_base=LLM_API_BASE,
                 llm_api_key=LLM_API_KEY,
                 model_name=MODEL_NAME,
