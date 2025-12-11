@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>管理端 - 语音RAG系统</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif; margin: 0; background: #f5f6fa; }
+    header { background:#2c3e50; color:#fff; padding:14px 18px; display:flex; align-items:center; justify-content:space-between; }
+    header .title { font-weight:700; }
+    header .right a, header .right button { color:#fff; margin-left:12px; background: transparent; border:1px solid rgba(255,255,255,.25); padding:6px 10px; border-radius:6px; cursor:pointer; }
+    .container { max-width: 1080px; margin: 20px auto; padding: 0 16px 40px; }
+    .card { background:#fff; border-radius:12px; box-shadow:0 4px 18px rgba(0,0,0,.06); padding:18px; margin-bottom:16px; }
+    h2 { margin:0 0 14px; font-size:18px; color:#333; }
+    .row { display:flex; gap:14px; align-items:center; flex-wrap:wrap; }
+    label { color:#555; }
+    select, textarea, input[type=text] { width:100%; max-width:520px; padding:10px; border-radius:6px; border:1px solid #ddd; font-size:14px; }
+    button.primary { background:#4CAF50; color:#fff; border:none; padding:10px 14px; border-radius:8px; cursor:pointer; }
+    button.warn { background:#e74c3c; color:#fff; border:none; padding:8px 12px; border-radius:8px; cursor:pointer; }
+    .muted { color:#999; font-size:12px; }
+    ul.files { list-style:none; padding:0; margin:0; }
+    ul.files li { display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid #f0f0f0; padding:10px 4px; }
+
+    /* 登录遮罩 */
+    .login-mask { position:fixed; inset:0; background:#111827; display:flex; align-items:center; justify-content:center; }
+    .login-panel { width: 92%; max-width: 360px; background:#fff; border-radius:12px; box-shadow:0 8px 32px rgba(0,0,0,.2); padding:22px; }
+    .login-panel h3 { margin:0 0 12px; color:#111; }
+    .login-panel input { width:100%; padding:10px; margin:8px 0; border:1px solid #ddd; border-radius:6px; }
+    .login-panel button { width:100%; margin-top:8px; }
+    .error { color:#e74c3c; font-size:13px; margin-top:6px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="title">管理端 - 语音 RAG 系统</div>
+    <div class="right">
+      <a href="/">用户端</a>
+      <button id="btnLogout">退出登录</button>
+    </div>
+  </header>
+
+  <div class="container">
+    <div class="card" id="cardModel">
+      <h2>模型设置</h2>
+      <div class="row">
+        <label for="modelSelect">选择 LLM 模型：</label>
+        <select id="modelSelect">
+          <option value="local">本地模型 (Qwen2.5-7B)</option>
+          <option value="deepseek">DeepSeek API</option>
+        </select>
+        <span id="modelStatus" class="muted"></span>
+      </div>
+    </div>
+
+    <div class="card" id="cardHotwords">
+      <h2>热词部署</h2>
+      <div>
+        <textarea id="hotwordsInput" rows="6" placeholder="每行一个热词，最后可选权重（空格分隔）\n示例：\n阿里巴巴 20\nhello world 40"></textarea>
+        <div class="muted">提示：将会用于 ASR 的热词增强，格式为“热词 可选权重”。</div>
+        <div style="margin-top:10px;">
+          <button id="btnSaveHotwords" class="primary">保存热词</button>
+          <span id="hotwordsStatus" class="muted"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" id="cardFiles">
+      <h2>文件管理 / 知识库</h2>
+      <div class="row">
+        <input type="file" id="fileInput" accept=".txt,.md,.pdf" />
+        <button id="btnUpload" class="primary">上传并添加到知识库</button>
+        <span id="uploadStatus" class="muted"></span>
+      </div>
+      <div style="margin-top:10px;">
+        <h3 style="margin:0 0 8px; font-size:15px; color:#444;">当前知识库文件列表</h3>
+        <ul id="fileList" class="files"><li class="muted">正在加载...</li></ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- 登录遮罩 -->
+  <div id="loginMask" class="login-mask" style="display:none;">
+    <div class="login-panel">
+      <h3>管理员登录</h3>
+      <input id="loginUser" type="text" placeholder="用户名" />
+      <input id="loginPass" type="password" placeholder="密码" />
+      <button id="btnLogin" class="primary">登录</button>
+      <div id="loginError" class="error" style="display:none;"></div>
+    </div>
+  </div>
+
+  <script>
+    // ==== 简易鉴权（需要后端提供 /api/login 返回 {success, token}）====
+    const LS_TOKEN_KEY = 'auth_token';
+    function setToken(t){ if(t){ localStorage.setItem(LS_TOKEN_KEY, t); } }
+    function getToken(){ return localStorage.getItem(LS_TOKEN_KEY) || ''; }
+    function clearToken(){ localStorage.removeItem(LS_TOKEN_KEY); }
+    function authHeaders(){ const t=getToken(); return t? { 'Authorization': 'Bearer '+t }: {}; }
+
+    const loginMask = document.getElementById('loginMask');
+    const loginUser = document.getElementById('loginUser');
+    const loginPass = document.getElementById('loginPass');
+    const btnLogin  = document.getElementById('btnLogin');
+    const btnLogout = document.getElementById('btnLogout');
+    const loginError= document.getElementById('loginError');
+
+    async function ensureAuthed(){
+      // 粗略校验：尝试拉取模型配置
+      try{
+        const r = await fetch('/api/model', { headers: { 'Content-Type':'application/json', ...authHeaders() } });
+        const j = await r.json();
+        if(j && (j.success!==false)) return true;
+      }catch(_){ }
+      return false;
+    }
+
+    function showLogin(){ loginMask.style.display='flex'; loginError.style.display='none'; loginError.textContent=''; }
+    function hideLogin(){ loginMask.style.display='none'; }
+
+    btnLogin.onclick = async ()=>{
+      const u = loginUser.value.trim();
+      const p = loginPass.value.trim();
+      if(!u || !p){ loginError.textContent='请输入用户名和密码'; loginError.style.display='block'; return; }
+      try{
+        const r = await fetch('/api/login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({username:u,password:p}) });
+        const j = await r.json();
+        if(j && j.success && j.token){ setToken(j.token); hideLogin(); await initAdmin(); }
+        else { loginError.textContent = '登录失败：'+(j && j.error || '未知错误'); loginError.style.display='block'; }
+      }catch(e){ loginError.textContent='登录出错：'+e.message; loginError.style.display='block'; }
+    };
+
+    btnLogout.onclick = ()=>{ clearToken(); showLogin(); };
+
+    // ==== 管理功能：模型、热词、文件 ====
+    const modelSelect  = document.getElementById('modelSelect');
+    const modelStatus  = document.getElementById('modelStatus');
+    const hotwordsInput= document.getElementById('hotwordsInput');
+    const btnSaveHot   = document.getElementById('btnSaveHotwords');
+    const hotwordsStatus=document.getElementById('hotwordsStatus');
+    const fileInput    = document.getElementById('fileInput');
+    const btnUpload    = document.getElementById('btnUpload');
+    const uploadStatus = document.getElementById('uploadStatus');
+    const fileList     = document.getElementById('fileList');
+
+    async function loadModelSettings(){
+      try{
+        const r = await fetch('/api/model', { headers: { 'Content-Type':'application/json', ...authHeaders() } });
+        const j = await r.json();
+        if(j && j.success && j.current_model){ modelSelect.value=j.current_model; }
+      }catch(e){ modelStatus.textContent='加载失败'; }
+    }
+    modelSelect.addEventListener('change', async ()=>{
+      const modelType = modelSelect.value;
+      modelStatus.textContent='正在切换...';
+      try{
+        const r= await fetch('/api/model',{ method:'POST', headers:{'Content-Type':'application/json', ...authHeaders()}, body: JSON.stringify({model_type:modelType}) });
+        const j= await r.json();
+        modelStatus.textContent = j.success ? '✅ 已切换' : '❌ 失败';
+        if(!j.success) alert('切换失败：'+(j.error||'未知错误'));
+        setTimeout(()=>modelStatus.textContent='',2000);
+      }catch(e){ modelStatus.textContent='❌ 出错'; }
+    });
+
+    async function loadHotwords(){
+      try{
+        const r = await fetch('/api/hotwords', { headers: { ...authHeaders() } });
+        const j = await r.json();
+        if(j && j.hotwords){ hotwordsInput.value = j.hotwords; }
+      }catch(_){ }
+    }
+    btnSaveHot.onclick = async ()=>{
+      try{
+        hotwordsStatus.textContent='保存中...';
+        const r = await fetch('/api/hotwords', { method:'POST', headers:{'Content-Type':'application/json', ...authHeaders()}, body: JSON.stringify({hotwords: hotwordsInput.value}) });
+        const j = await r.json();
+        hotwordsStatus.textContent = j && j.success ? '✅ 已保存' : '❌ 失败';
+        setTimeout(()=> hotwordsStatus.textContent='', 2000);
+      }catch(e){ hotwordsStatus.textContent='❌ 出错'; }
+    };
+
+    async function loadFiles(){
+      try{
+        fileList.innerHTML = '<li class="muted">加载中...</li>';
+        const r = await fetch('/api/files', { headers: { ...authHeaders() } });
+        const j = await r.json();
+        if(!j || !j.success){ fileList.innerHTML='<li class="muted">加载失败</li>'; return; }
+        const arr = j.files || [];
+        if(arr.length===0){ fileList.innerHTML='<li class="muted">暂无文件</li>'; return; }
+        fileList.innerHTML = arr.map(f=>{
+          const date = new Date(f.mtime*1000).toLocaleString();
+          const size = (f.size/1024).toFixed(1)+' KB';
+          return `<li><div><div>${f.name}</div><div class='muted'>${date} · ${size}</div></div><button class='warn' onclick="deleteFile(this,'${f.name}')">删除</button></li>`;
+        }).join('');
+      }catch(e){ fileList.innerHTML='<li class="muted">加载出错</li>'; }
+    }
+
+    window.deleteFile = async function(btn, filename){
+      if(!confirm(`确定要删除文件 "${filename}" 吗？这将重建知识库，可能需要一点时间。`)) return;
+      try{
+        const ori = btn.textContent; btn.textContent='删除中...'; btn.disabled=true;
+        const r = await fetch('/api/files',{ method:'DELETE', headers:{'Content-Type':'application/json', ...authHeaders()}, body: JSON.stringify({filename}) });
+        const j = await r.json();
+        if(j && j.success){ await loadFiles(); }
+        else { alert('删除失败：'+(j && j.error||'未知错误')); btn.textContent=ori; btn.disabled=false; }
+      }catch(e){ alert('删除出错：'+e.message); btn.textContent='删除'; btn.disabled=false; }
+    };
+
+    btnUpload.onclick = async ()=>{
+      if(!fileInput.files || fileInput.files.length===0){ alert('请先选择要上传的文件'); return; }
+      const form = new FormData(); form.append('file', fileInput.files[0]);
+      uploadStatus.textContent='上传中...';
+      try{
+        const r = await fetch('/api/upload_kb', { method:'POST', headers: { ...authHeaders() }, body: form });
+        const j = await r.json();
+        if(j && j.success){ uploadStatus.textContent='✅ 上传成功'; fileInput.value=''; await loadFiles(); }
+        else { uploadStatus.textContent='❌ 上传失败：'+(j && j.error || '未知错误'); }
+      }catch(e){ uploadStatus.textContent='❌ 出错：'+e.message; }
+    };
+
+    async function initAdmin(){
+      const authed = await ensureAuthed();
+      if(!authed){ showLogin(); return; }
+      hideLogin();
+      await Promise.all([loadModelSettings(), loadHotwords(), loadFiles()]);
+    }
+
+    (async ()=>{
+      // 初始：如果已有token，尝试直接进入；否则显示登录
+      const ok = await ensureAuthed();
+      if(ok) await initAdmin(); else showLogin();
+    })();
+  </script>
+</body>
+</html>
+

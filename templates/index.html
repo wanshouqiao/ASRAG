@@ -226,6 +226,9 @@
     <div class="container">
         <h1>🎤 语音 RAG 问答系统</h1>
         <p class="subtitle">点击录音按钮，说出您的问题，AI 将基于知识库为您解答</p>
+        <div style="text-align:right; margin-top:6px;">
+            <a href="/admin" style="font-size: 0.9em; color:#1976d2; text-decoration:none;">进入管理端 ▶</a>
+        </div>
 
         <div id="status" class="status idle">准备就绪</div>
 
@@ -268,7 +271,7 @@
             <button id="btnSend" class="btn-record" style="padding: 10px 20px;">发送</button>
         </div>
 
-        <div class="result-section" style="margin-top:15px;">
+        <div class="result-section" style="margin-top:15px; display:none;">
             <h3>模型设置</h3>
             <div style="margin-top:10px; display: flex; align-items: center; gap: 10px;">
                 <label for="modelSelect">选择 LLM 模型：</label>
@@ -290,7 +293,7 @@
             </div>
         </div>
 
-        <div class="result-section" style="margin-top:15px;">
+        <div class="result-section" style="margin-top:15px; display:none;">
             <h3>知识库文件管理</h3>
             <div style="margin-top:10px; margin-bottom:15px;">
                 <input type="file" id="fileInput" accept=".txt,.md,.pdf" style="margin-right:10px;"/>

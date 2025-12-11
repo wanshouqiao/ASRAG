@@ -11,7 +11,7 @@ import os
 import sys
 import time
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, abort
 
 from app.asr_module import ASRModule
 from app.rag_module import RAGModule
@@ -29,6 +29,26 @@ ROOT_DIR = os.path.dirname(APP_DIR)
 TEMPLATE_DIR = os.path.join(ROOT_DIR, "templates")
 STATIC_DIR = os.path.join(ROOT_DIR, "static")
 app = Flask(__name__, template_folder=TEMPLATE_DIR, static_folder=STATIC_DIR)
+
+# ========== 管理端鉴权 ==========
+from functools import wraps
+import secrets
+
+ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin")
+_VALID_TOKENS = set()
+
+def require_auth(fn):
+    @wraps(fn)
+    def _wrap(*args, **kwargs):
+        auth = request.headers.get("Authorization", "")
+        if not auth.startswith("Bearer "):
+            return jsonify({"success": False, "error": "Unauthorized"}), 401
+        token = auth.split(" ", 1)[1].strip()
+        if token not in _VALID_TOKENS:
+            return jsonify({"success": False, "error": "Unauthorized"}), 401
+        return fn(*args, **kwargs)
+    return _wrap
 
 
 @app.after_request
@@ -73,9 +93,29 @@ def save_config(config):
 def index():
     return render_template("index.html")
 
+@app.route("/admin")
+def admin_page():
+    return render_template("admin.html")
+
+@app.route("/api/login", methods=["POST"])
+def api_login():
+    try:
+        data = request.get_json(force=True)
+        username = data.get("username", "")
+        password = data.get("password", "")
+        if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
+            token = secrets.token_urlsafe(32)
+            _VALID_TOKENS.add(token)
+            return jsonify({"success": True, "token": token})
+        return jsonify({"success": False, "error": "用户名或密码错误"}), 401
+    except Exception as e:
+        logger.error("登录失败: %s", e)
+        return jsonify({"success": False, "error": str(e)}), 500
+
 
 # --- 热词管理 ---
 @app.route("/api/hotwords", methods=["GET", "POST"])
+@require_auth
 def manage_hotwords():
     if request.method == "GET":
         content = asr_module.read_hotwords()
@@ -235,6 +275,7 @@ def text_chat():
 
 # --- 文件管理 ---
 @app.route("/api/files", methods=["GET"])
+@require_auth
 def list_files():
     if not os.path.exists(UPLOAD_DIR):
         return jsonify({"success": True, "files": []})
@@ -248,6 +289,7 @@ def list_files():
 
 
 @app.route("/api/files", methods=["DELETE"])
+@require_auth
 def delete_file():
     try:
         data = request.get_json()
@@ -266,6 +308,7 @@ def delete_file():
 
 
 @app.route("/api/upload_kb", methods=["POST"])
+@require_auth
 def upload_kb():
     try:
         if "file" not in request.files:
@@ -294,6 +337,7 @@ def upload_kb():
 
 # --- 模型管理 ---
 @app.route("/api/model", methods=["GET", "POST"])
+@require_auth
 def manage_model():
     if request.method == "GET":
         return jsonify(
