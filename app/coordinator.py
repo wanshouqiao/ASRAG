@@ -417,7 +417,7 @@ def recognize_and_query():
 
 def main():
     global asr_module, rag_module
-    FUNASR_WS_URL = "ws://127.0.0.1:10095/"
+    FUNASR_WS_URL = "wss://127.0.0.1:10095/"
     LLM_API_BASE = "http://localhost:8000/#"
     LLM_API_KEY = ""
     MODEL_NAME = "qwen2.5-7b-instruct"
@@ -462,7 +462,7 @@ def main():
     print("请在浏览器中打开: http://localhost:7000")
     print("按 Ctrl+C 退出程序")
     print("=" * 60 + "\n")
-    app.run(host="0.0.0.0", port=7000, debug=debug_mode)
+    app.run(host="0.0.0.0", port=7000, debug=debug_mode, ssl_context=("lucky.taila62a2b.ts.net.crt","lucky.taila62a2b.ts.net.key"))
 
 
 if __name__ == "__main__":

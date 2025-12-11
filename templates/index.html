@@ -246,6 +246,11 @@
 
         <div id="status" class="status idle">准备就绪</div>
 
+        <!-- SSL 自签证书信任提示 -->
+        <div id="ssl-auth-hint" style="display:none; text-align:center; margin-bottom:15px; background:#fff3cd; color:#856404; padding:10px; border-radius:8px; border:1px solid #ffeeba; font-size: 0.9em;">
+            ⚠️ 连接失败。如果是自签证书，请 <a id="ssl-auth-link" href="#" target="_blank" style="color:#856404; font-weight:bold; text-decoration:underline;">点击此处打开 WSS 服务</a><br>并选择“高级 -> 继续访问”或“接受风险”，然后刷新本页。
+        </div>
+
         <div class="controls">
             <button id="btnClear" class="btn-clear">🗑️ 清空记录</button>
         </div>
@@ -1315,7 +1320,20 @@ async function sendRecognizedToLLM(text) {
                 }
             };
 
-            ws.onclose = () => {
+            ws.onclose = (ev) => {
+                console.log('WebSocket closed:', ev.code, ev.reason);
+                
+                // 如果从未连接成功就断开，很可能是证书问题或端口不通
+                if (!wsConnected && !wsResetting) {
+                    const hint = document.getElementById('ssl-auth-hint');
+                    if(hint) {
+                        hint.style.display = 'block';
+                        const link = document.getElementById('ssl-auth-link');
+                        // 将 wss:// 转为 https:// 供用户点击访问
+                        if(link) link.href = 'https://192.168.137.2:1337';
+                    }
+                }
+
                 wsConnected = false;
                 // 如果是我们主动的重启流程，不要抛出“连接已关闭”的提示
                 if (wsResetting) return;
