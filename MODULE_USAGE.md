@@ -30,6 +30,6 @@
 
 ## 路由与调用关系（全部定义在 `coordinator.py`）
 - ASR 路由：`/api/recognize`、`/api/save_recognition`、`/api/hotwords`、`/api/correct` → 调用 `ASRModule`。
-- RAG 路由：`/api/query`、`/api/text_chat`、`/api/files`(GET/DELETE)、`/api/upload_kb`、`/api/model` → 调用 `RAGModule`。
+- RAG 路由：`/api/query`（支持文字、图片、TTS）、`/api/files`(GET/DELETE)、`/api/upload_kb`、`/api/model` → 调用 `RAGModule`。
 - 组合路由：`/api/recognize_and_query` 先 `ASRModule.recognize_audio`，再 `RAGModule.query`，最后 `RAGModule.text_to_speech`。
 
