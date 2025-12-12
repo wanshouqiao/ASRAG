@@ -10,8 +10,11 @@ import logging
 import os
 import sys
 import time
+import uuid
+from pathlib import Path
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, abort, send_file
+from werkzeug.exceptions import HTTPException
 
 from app.asr_module import ASRModule
 from app.rag_module import RAGModule
@@ -23,13 +26,32 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Flask 应用
 # Flask 应用（显式指定模板与静态目录，避免因包目录变化找不到模板）
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(APP_DIR)
 TEMPLATE_DIR = os.path.join(ROOT_DIR, "templates")
 STATIC_DIR = os.path.join(ROOT_DIR, "static")
 app = Flask(__name__, template_folder=TEMPLATE_DIR, static_folder=STATIC_DIR)
+
+# ========== 管理端鉴权 ==========
+from functools import wraps
+import secrets
+
+ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin")
+_VALID_TOKENS = set()
+
+def require_auth(fn):
+    @wraps(fn)
+    def _wrap(*args, **kwargs):
+        auth = request.headers.get("Authorization", "")
+        if not auth.startswith("Bearer "):
+            return jsonify({"success": False, "error": "Unauthorized"}), 401
+        token = auth.split(" ", 1)[1].strip()
+        if token not in _VALID_TOKENS:
+            return jsonify({"success": False, "error": "Unauthorized"}), 401
+        return fn(*args, **kwargs)
+    return _wrap
 
 
 @app.after_request
@@ -40,13 +62,33 @@ def after_request(response):
     return response
 
 
+@app.errorhandler(Exception)
+def handle_exceptions(err):
+    """
+    捕获未处理异常，统一返回 JSON，避免前端收到 HTML 导致 JSON 解析报错。
+    """
+    if isinstance(err, HTTPException):
+        return jsonify({"error": err.description, "code": err.code}), err.code
+    logger.exception("未处理异常: %s", err)
+    return jsonify({"error": "服务器内部错误"}), 500
+
+
 # 路径与配置（ROOT_DIR 为项目根目录）
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.dirname(APP_DIR)
+TEMP_AUDIO_DIR = os.path.join(ROOT_DIR, "temp_audio")
 UPLOAD_DIR = os.path.join(ROOT_DIR, "uploads", "documents")  # 知识库文件目录
 UPLOAD_KB_IMAGES_DIR = os.path.join(ROOT_DIR, "uploads", "images")  # 知识库图片目录
 UPLOAD_CHAT_IMAGES_DIR = os.path.join(ROOT_DIR, "uploads", "chat_images")  # 对话框图片目录
 CONFIG_FILE = os.path.join(ROOT_DIR, "app_config.json")
 HOTWORDS_FILE = os.path.join(ROOT_DIR, "hotwords.txt")
 KB_PATH = os.path.join(ROOT_DIR, "knowledge.txt")
+
+# 确保临时音频目录存在
+os.makedirs(TEMP_AUDIO_DIR, exist_ok=True)
+
+# 确保临时音频目录存在
+os.makedirs(TEMP_AUDIO_DIR, exist_ok=True)
 
 asr_module = None
 rag_module = None
@@ -74,9 +116,29 @@ def save_config(config):
 def index():
     return render_template("index.html")
 
+@app.route("/admin")
+def admin_page():
+    return render_template("admin.html")
+
+@app.route("/api/login", methods=["POST"])
+def api_login():
+    try:
+        data = request.get_json(force=True)
+        username = data.get("username", "")
+        password = data.get("password", "")
+        if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
+            token = secrets.token_urlsafe(32)
+            _VALID_TOKENS.add(token)
+            return jsonify({"success": True, "token": token})
+        return jsonify({"success": False, "error": "用户名或密码错误"}), 401
+    except Exception as e:
+        logger.error("登录失败: %s", e)
+        return jsonify({"success": False, "error": str(e)}), 500
+
 
 # --- 热词管理 ---
 @app.route("/api/hotwords", methods=["GET", "POST"])
+@require_auth
 def manage_hotwords():
     if request.method == "GET":
         content = asr_module.read_hotwords()
@@ -187,8 +249,6 @@ def query():
             image_file = request.files.get("image")
 
             if image_file and image_file.filename:
-                import uuid
-
                 # 基础校验
                 allowed_ext = {"jpg", "jpeg", "png", "webp"}
                 _, ext = os.path.splitext(image_file.filename)
@@ -248,19 +308,101 @@ def query():
             result["image_path"] = os.path.relpath(image_path, ROOT_DIR) if image_path else None
         
         if audio_bytes:
-            audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
-            result["audio"] = f"data:audio/wav;base64,{audio_base64}"
-            return jsonify(result)
-        
-        result["audio"] = None
-        return jsonify(result)
+            # 保存音频文件并返回URL，避免data URI长度限制
+            audio_id = str(uuid.uuid4())
+            audio_path = os.path.join(TEMP_AUDIO_DIR, f"{audio_id}.wav")
+            with open(audio_path, "wb") as f:
+                f.write(audio_bytes)
+            audio_size_mb = len(audio_bytes) / (1024 * 1024)
+            logger.info("音频文件已保存: %s, 大小: %.2f MB", audio_id, audio_size_mb)
+            audio_url = f"/api/audio/{audio_id}"
+            return jsonify(
+                {
+                    "success": True,
+                    "recognized_text": text,
+                    "answer": answer,
+                    "audio": audio_url,
+                    "audio_id": audio_id,
+                    "timings": timings,
+                    "sources": sources,
+                }
+            )
+        return jsonify(
+            {
+                "success": True,
+                "recognized_text": text,
+                "answer": answer,
+                "audio": None,
+                "audio_id": audio_id,
+                "timings": timings,
+                "sources": sources,
+            }
+        )
     except Exception as e:
         logger.error("对话 API 错误: %s", e)
         return jsonify({"error": str(e)}), 500
 
 
+# --- 纯文本聊天（供语音识别直接调用）---
+@app.route("/api/text_chat", methods=["POST"])
+def text_chat():
+    start_time = time.time()
+    timings = {}
+    try:
+        data = request.get_json() or {}
+        text = (data.get("text") or "").strip()
+        audio_id = data.get("audio_id")
+
+        if not text:
+            return jsonify({"error": "输入文本不能为空"}), 400
+
+        t0 = time.time()
+        answer, rag_timings, sources = rag_module.query(question=text)
+        timings["rag_time"] = time.time() - t0
+        timings.update(rag_timings)
+
+        t0 = time.time()
+        audio_bytes = rag_module.text_to_speech(answer)
+        timings["tts_time"] = time.time() - t0
+        timings["total_time"] = time.time() - start_time
+
+        if audio_bytes:
+            audio_id = str(uuid.uuid4())
+            audio_path = os.path.join(TEMP_AUDIO_DIR, f"{audio_id}.wav")
+            with open(audio_path, "wb") as f:
+                f.write(audio_bytes)
+            audio_url = f"/api/audio/{audio_id}"
+            return jsonify(
+                {
+                    "success": True,
+                    "recognized_text": text,
+                    "answer": answer,
+                    "audio": audio_url,
+                    "audio_id": audio_id,
+                    "timings": timings,
+                    "sources": sources,
+                }
+            )
+
+        return jsonify(
+            {
+                "success": True,
+                "recognized_text": text,
+                "answer": answer,
+                "audio": None,
+                "audio_id": audio_id,
+                "timings": timings,
+                "sources": sources,
+            }
+        )
+    except Exception as e:
+        logger.error("text_chat API 错误: %s", e)
+        return jsonify({"error": str(e)}), 500
+
+
 # --- 文件管理 ---
 @app.route("/api/files", methods=["GET"])
+@require_auth
 def list_files():
     files = []
     
@@ -297,6 +439,7 @@ def list_files():
 
 
 @app.route("/api/files", methods=["DELETE"])
+@require_auth
 def delete_file():
     try:
         data = request.get_json()
@@ -328,6 +471,7 @@ def delete_file():
 
 
 @app.route("/api/upload_kb", methods=["POST"])
+@require_auth
 def upload_kb():
     try:
         if "file" not in request.files:
@@ -389,6 +533,7 @@ def upload_kb():
 
 # --- 模型管理 ---
 @app.route("/api/model", methods=["GET", "POST"])
+@require_auth
 def manage_model():
     if request.method == "GET":
         return jsonify(
@@ -412,6 +557,20 @@ def manage_model():
         )
     except Exception as e:
         logger.error("切换模型失败: %s", e)
+        return jsonify({"error": str(e)}), 500
+
+
+# --- 音频文件端点 ---
+@app.route("/api/audio/<audio_id>", methods=["GET"])
+def get_audio(audio_id):
+    """返回临时音频文件"""
+    try:
+        audio_path = os.path.join(TEMP_AUDIO_DIR, f"{audio_id}.wav")
+        if not os.path.exists(audio_path):
+            return jsonify({"error": "音频文件不存在"}), 404
+        return send_file(audio_path, mimetype="audio/wav")
+    except Exception as e:
+        logger.error("获取音频文件失败: %s", e)
         return jsonify({"error": str(e)}), 500
 
 
@@ -440,13 +599,21 @@ def recognize_and_query():
         timings["tts_time"] = time.time() - t0
         timings["total_time"] = time.time() - start_time
         if audio_bytes:
-            audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
+            # 保存音频文件并返回URL，避免data URI长度限制
+            audio_id = str(uuid.uuid4())
+            audio_path = os.path.join(TEMP_AUDIO_DIR, f"{audio_id}.wav")
+            with open(audio_path, "wb") as f:
+                f.write(audio_bytes)
+            audio_size_mb = len(audio_bytes) / (1024 * 1024)
+            logger.info("音频文件已保存: %s, 大小: %.2f MB", audio_id, audio_size_mb)
+            audio_url = f"/api/audio/{audio_id}"
             return jsonify(
                 {
                     "success": True,
                     "recognized_text": recognized_text,
                     "answer": answer,
-                    "audio": f"data:audio/wav;base64,{audio_base64}",
+                    "audio": audio_url,
+                    "audio_id": audio_id,
                     "timings": timings,
                     "sources": sources,
                 }
@@ -468,8 +635,8 @@ def recognize_and_query():
 
 def main():
     global asr_module, rag_module
-    FUNASR_WS_URL = "ws://127.0.0.1:10095/"
-    LLM_API_BASE = "http://localhost:8000"
+    FUNASR_WS_URL = "wss://127.0.0.1:10095/"
+    LLM_API_BASE = "http://localhost:8000/#"
     LLM_API_KEY = ""
     
     # 从配置文件读取模型名称，如果没有则使用默认值
@@ -513,10 +680,10 @@ def main():
     print("\n" + "=" * 60)
     print("Web 语音 RAG 系统已启动！")
     print("=" * 60)
-    print("请在浏览器中打开: http://localhost:5000")
+    print("请在浏览器中打开: http://localhost:7000")
     print("按 Ctrl+C 退出程序")
     print("=" * 60 + "\n")
-    app.run(host="0.0.0.0", port=5000, debug=debug_mode)
+    app.run(host="0.0.0.0", port=7000, debug=debug_mode, ssl_context=("lucky.taila62a2b.ts.net.crt","lucky.taila62a2b.ts.net.key"))
 
 
 if __name__ == "__main__":

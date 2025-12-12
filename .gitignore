@@ -10,3 +10,4 @@ vectorstores/
 dialect_data/audio/
 dialect_data/metadata.jsonl
 *.wav
+temp_audio/

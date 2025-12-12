@@ -1,0 +1,11 @@
+{
+	"folders": [
+		{
+			"path": "../../../../data/AI/LlamaCPPProject/asr/FunASR/runtime"
+		},
+		{
+			"path": ".."
+		}
+	],
+	"settings": {}
+}
