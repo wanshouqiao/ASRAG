@@ -220,13 +220,6 @@
         .hidden {
             display: none;
         }
-        /* 精简对话UI：麦克风悬浮按钮与动效 */
-        .mic-fab { position: fixed; left:50%; bottom: 28px; transform: translateX(-50%); z-index: 1000; display: flex; align-items:center; justify-content:center; }
-        .mic-fab .pulse { position:absolute; width:84px; height:84px; border-radius:50%; background: rgba(76, 175, 80, 0.15); animation: pulse 2s ease-out infinite; opacity:0; }
-        .mic-fab.active .pulse { opacity:1; }
-        .mic-fab button { width:64px; height:64px; border-radius:50%; border:none; background:#4CAF50; color:#fff; font-size:24px; box-shadow:0 8px 24px rgba(76,175,80,.4); cursor:pointer; }
-        .mic-fab button.stop { background:#f44336; box-shadow:0 8px 24px rgba(244,67,54,.4); }
-        @keyframes pulse { 0%{ transform: scale(0.9); opacity:.6;} 70%{ transform: scale(1.2); opacity:.2;} 100%{ transform: scale(1.4); opacity:0;} }
         /* 语音动效（用户说话/AI说话）*/
         .equalizer { display:flex; gap:3px; align-items:flex-end; height:22px; }
         .equalizer span { width:3px; background:#4CAF50; display:block; border-radius:2px; height:8px; transition: height .08s linear; }
@@ -344,11 +337,6 @@
         </div>
     </div>
 
-    <!-- 悬浮麦克风按钮（语音对话主入口） -->
-    <div id="micFab" class="mic-fab">
-        <div class="pulse"></div>
-        <button id="micFabBtn" title="按下开始/停止监听">🎤</button>
-    </div>
     <!-- AI 说话动效（TTS 播放时显示） -->
     <div id="assistantSpeaking" style="display:none;">
         <div class="equalizer" id="assistantEq">
@@ -384,23 +372,10 @@
         let recognizedTextDiv = document.getElementById('recognizedText');
         const recognitionMeta = document.getElementById('recognitionMeta');
 
-        // ======= 精简语音对话 UI：麦克风悬浮按钮 + AI 说话动效 =======
-        const micFab = document.getElementById('micFab');
-        const micFabBtn = document.getElementById('micFabBtn');
+        // ======= AI 说话动效 =======
         const assistantSpeaking = document.getElementById('assistantSpeaking');
         const assistantEq = document.getElementById('assistantEq');
         let eqTimer = null;
-        function setMicFabActive(active){
-            if (active) {
-                micFab.classList.add('active');
-                micFabBtn.classList.add('stop');
-                micFabBtn.textContent = '⏹️';
-            } else {
-                micFab.classList.remove('active');
-                micFabBtn.classList.remove('stop');
-                micFabBtn.textContent = '🎤';
-            }
-        }
         function startAssistantEq(){
             assistantSpeaking.style.display = 'flex';
             const bars = assistantEq ? assistantEq.querySelectorAll('span') : [];
@@ -415,24 +390,7 @@
             bars.forEach(b=> b.style.height='8px');
             assistantSpeaking.style.display = 'none';
         }
-        micFabBtn.addEventListener('click', async ()=>{
-            if (!micEnabled) {
-                // 触发现有“启用监听”流程
-                const btn = document.getElementById('btnWakeEnableMic');
-                if (btn) btn.click();
-                setMicFabActive(true);
-            } else {
-                // 停止监听，隐藏动效
-                if (typeof stopMicAndStream === 'function') {
-                    await stopMicAndStream('已关闭监听');
-                }
-                setMicFabActive(false);
-                if (btnWakeBypass) btnWakeBypass.style.display = 'none';
-            }
-        });
-        // 初始化FAB外观
-        setMicFabActive(false);
-        // ======= 结束：精简语音对话 UI =======
+        // ======= 结束：AI 说话动效 =======
 
         // 加载当前模型设置
         async function loadModelSettings() {
@@ -1020,20 +978,39 @@
         }
 
         // 更新 UI 状态
+        let currentUIState = 'idle'; // 记录当前UI状态
         function updateUI(state) {
+            const previousState = currentUIState;
+            currentUIState = state;
             status.className = `status ${state}`;
             switch(state) {
                 case 'idle':
                     status.textContent = '准备就绪';
                     waveform.classList.add('hidden');
+                    // 如果之前是处理状态，且麦克风已启用，且未唤醒，恢复唤醒词监听
+                    if (previousState === 'processing' && micEnabled && ws && ws.readyState === 1 && !hasWoken) {
+                        // 如果之前未唤醒，恢复唤醒词监听
+                        const ww = (wakeWordInput.value || '').trim();
+                        if (ww) sendCtrl({ wake_word: ww });
+                        sendCtrl({ wake_word_enabled: true, is_speaking: true });
+                    }
                     break;
                 case 'recording':
                     status.textContent = '正在录音...';
                     waveform.classList.remove('hidden');
+                    // 如果之前是处理状态，且已经唤醒，恢复语音输入（但不重新开启唤醒词，因为已经唤醒了）
+                    if (previousState === 'processing' && micEnabled && ws && ws.readyState === 1 && hasWoken) {
+                        // 已经唤醒状态，只需要恢复is_speaking，不需要重新开启唤醒词监听
+                        sendCtrl({ is_speaking: true });
+                    }
                     break;
                 case 'processing':
                     status.textContent = '正在处理';
                     waveform.classList.add('hidden');
+                    // 处理状态时，禁用语音输入（关闭唤醒词监听）
+                    if (micEnabled && ws && ws.readyState === 1) {
+                        sendCtrl({ wake_word_enabled: false, is_speaking: false });
+                    }
                     break;
             }
         }
@@ -1262,23 +1239,36 @@ async function sendRecognizedToLLM(text) {
                             updateUI('idle');
                             // 回到等待唤醒状态
                             hasWoken = false;
-                            setMicFabActive(false);
                         } else if (msg.event === 'wake_word_detected') {
+                            // 如果正在处理，忽略唤醒词
+                            if (status.className.includes('processing')) {
+                                console.log('正在处理中，忽略唤醒词');
+                                return;
+                            }
                             setWakeStatus('已唤醒，开始识别...');
                             updateUI('recording');
                             // 用户说话阶段：开启录音动效
                             hasWoken = true;
                             silenceAccumMs = 0;
                             silenceGuardUntil = Date.now() + SILENCE_GUARD_MS;
-                            setMicFabActive(true);
                         } else if (msg.event === 'wake_word_bypassed') {
+                            // 如果正在处理，忽略跳过唤醒词
+                            if (status.className.includes('processing')) {
+                                console.log('正在处理中，忽略跳过唤醒词');
+                                return;
+                            }
                             setWakeStatus('已跳过唤醒词，直接识别中...');
                             updateUI('recording');
                             hasWoken = true;
                             silenceAccumMs = 0;
                             silenceGuardUntil = Date.now() + SILENCE_GUARD_MS;
-                            setMicFabActive(true);
                         } else if (typeof msg.text === 'string') {
+                            // 如果正在处理，忽略新的语音输入
+                            if (status.className.includes('processing')) {
+                                console.log('正在处理中，忽略新的语音输入');
+                                return;
+                            }
+                            
                             // 收到 ASR 文本（在线或离线）
                             lastRecognizedText = msg.text;
                             recognizedTextDiv.textContent = msg.text;
