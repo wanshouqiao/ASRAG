@@ -249,6 +249,38 @@
         /* 一键隐藏复杂模块（但不删除） */
         #recognitionResult{ display:none !important; }
         #btnClear{ display:none !important; }
+
+        .image-preview {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-top: 8px;
+            background: #f8f9fa;
+            border: 1px dashed #ddd;
+            padding: 10px;
+            border-radius: 8px;
+        }
+
+        .image-preview img {
+            width: 60px;
+            height: 60px;
+            object-fit: cover;
+            border-radius: 6px;
+            border: 1px solid #eee;
+        }
+
+        .image-preview .meta {
+            flex: 1;
+            color: #555;
+            font-size: 0.9em;
+        }
+
+        .image-preview button {
+            padding: 6px 10px;
+            font-size: 12px;
+            background: #ff7043;
+            color: white;
+        }
     </style>
 </head>
 <body>
@@ -298,7 +330,17 @@
 
         <div class="result-section" style="margin-top:15px; display:none; gap: 10px;">
             <input type="text" id="textInput" placeholder="或者在这里输入文字提问..." style="flex: 1; padding: 10px; border-radius: 5px; border: 1px solid #ddd;">
+            <input type="file" id="imageInput" accept="image/png,image/jpeg,image/webp" class="hidden">
+            <button id="btnImage" class="btn-record" style="padding: 10px 14px; white-space: nowrap;">📷 上传图片</button>
             <button id="btnSend" class="btn-record" style="padding: 10px 20px;">发送</button>
+        </div>
+        <div id="imagePreview" class="image-preview hidden">
+            <img id="imageThumb" alt="预览">
+            <div class="meta">
+                <div id="imageName"></div>
+                <div id="imageSize" style="color:#888;"></div>
+            </div>
+            <button id="btnClearImage" class="btn-clear" style="background:#ff7043;color:#fff;">移除</button>
         </div>
 
         <div class="result-section" style="margin-top:15px; display:none;">
@@ -326,7 +368,7 @@
         <div class="result-section" style="margin-top:15px; display:none;">
             <h3>知识库文件管理</h3>
             <div style="margin-top:10px; margin-bottom:15px;">
-                <input type="file" id="fileInput" accept=".txt,.md,.pdf" style="margin-right:10px;"/>
+                <input type="file" id="fileInput" accept=".txt,.md,.pdf,.jpg,.jpeg,.png,.webp,.gif,.bmp,image/*" style="margin-right:10px;"/>
                 <button id="btnUpload" class="btn-record" style="padding: 8px 15px; font-size: 14px;">上传并添加到知识库</button>
                 <div id="uploadStatus" class="result-text" style="margin-top:5px; font-size: 0.9em;"></div>
             </div>
@@ -386,6 +428,13 @@
         const modelStatus = document.getElementById('modelStatus');
         const textInput = document.getElementById('textInput');
         const btnSend = document.getElementById('btnSend');
+        const btnImage = document.getElementById('btnImage');
+        const imageInput = document.getElementById('imageInput');
+        const imagePreview = document.getElementById('imagePreview');
+        const imageThumb = document.getElementById('imageThumb');
+        const imageName = document.getElementById('imageName');
+        const imageSize = document.getElementById('imageSize');
+        const btnClearImage = document.getElementById('btnClearImage');
         const recognitionResult = document.getElementById('recognitionResult');
         let recognizedTextDiv = document.getElementById('recognizedText');
         const recognitionMeta = document.getElementById('recognitionMeta');
@@ -409,6 +458,7 @@
             assistantSpeaking.style.display = 'none';
         }
         // ======= 结束：AI 说话动效 =======
+        const MAX_IMAGE_SIZE = 2 * 1024 * 1024; // 2MB 限制
 
         // 加载当前模型设置
         async function loadModelSettings() {
@@ -489,13 +539,18 @@
             files.forEach(file => {
                 const date = new Date(file.mtime * 1000).toLocaleString();
                 const size = (file.size / 1024).toFixed(1) + ' KB';
+                const fileType = file.file_type || 'document'; // 向后兼容，默认为 document
+                const typeIcon = fileType === 'image' ? '🖼️' : '📄';
+                const typeLabel = fileType === 'image' ? '图片' : '文档';
+                // 转义文件名中的单引号，避免 onclick 中的引号冲突
+                const safeFilename = file.name.replace(/'/g, "\\'");
                 html += `
                     <li style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #f0f0f0;">
                         <div>
-                            <div style="font-weight: 500; color: #333;">${file.name}</div>
+                            <div style="font-weight: 500; color: #333;">${typeIcon} ${file.name} <span style="font-size: 0.8em; color: #999; font-weight: normal;">(${typeLabel})</span></div>
                             <div style="font-size: 0.8em; color: #999;">${date} · ${size}</div>
                         </div>
-                        <button onclick="deleteFile(this, '${file.name}')" style="padding: 5px 10px; font-size: 12px; background: #ff5252; color: white; border: none; border-radius: 5px; cursor: pointer;">删除</button>
+                        <button onclick="deleteFile('${safeFilename}', '${fileType}')" style="padding: 5px 10px; font-size: 12px; background: #ff5252; color: white; border: none; border-radius: 5px; cursor: pointer;">删除</button>
                     </li>
                 `;
             });
@@ -504,23 +559,39 @@
         }
 
         // 删除文件
-        window.deleteFile = async function(btn, filename) {
-            if (!confirm(`确定要删除文件 "${filename}" 吗？这将重建知识库，可能需要一点时间。`)) {
+        window.deleteFile = async function(filename, fileType) {
+            if (!fileType) {
+                alert('错误：无法确定文件类型，请刷新页面后重试');
+                return;
+            }
+            
+            const fileTypeLabel = fileType === 'image' ? '图片' : '文档';
+            if (!confirm(`确定要删除${fileTypeLabel} "${filename}" 吗？这将重建知识库，可能需要一点时间。`)) {
                 return;
             }
 
             try {
                 // 显示加载状态
-                const originalText = btn.textContent;
+                const btn = document.createElement('button');
                 btn.textContent = '删除中...';
                 btn.disabled = true;
+                btn.style.padding = '5px 10px';
+                btn.style.fontSize = '12px';
+                btn.style.background = '#ff5252';
+                btn.style.color = 'white';
+                btn.style.border = 'none';
+                btn.style.borderRadius = '5px';
+                btn.style.cursor = 'pointer';
 
                 const response = await fetch('/api/files', {
                     method: 'DELETE',
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ filename: filename })
+                    body: JSON.stringify({ 
+                        filename: filename,
+                        file_type: fileType
+                    })
                 });
                 
                 const data = await response.json();
@@ -577,26 +648,102 @@
         loadFiles();
         loadHotwords();
 
+        // 图片选择/预览
+        btnImage.addEventListener('click', () => imageInput.click());
+
+        imageInput.addEventListener('change', () => {
+            const file = imageInput.files && imageInput.files[0];
+            if (!file) {
+                clearImageSelection();
+                return;
+            }
+
+            const allowed = ['image/jpeg', 'image/png', 'image/webp'];
+            const extOk = allowed.includes(file.type) || /\.(jpg|jpeg|png|webp)$/i.test(file.name);
+            if (!extOk) {
+                showError('仅支持 jpg/jpeg/png/webp 图片');
+                clearImageSelection();
+                return;
+            }
+            if (file.size > MAX_IMAGE_SIZE) {
+                showError('图片大小超出 2MB 限制');
+                clearImageSelection();
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                imageThumb.src = e.target.result;
+                imageName.textContent = file.name;
+                imageSize.textContent = `${(file.size / 1024).toFixed(1)} KB`;
+                imagePreview.classList.remove('hidden');
+            };
+            reader.readAsDataURL(file);
+        });
+
+        btnClearImage.addEventListener('click', () => {
+            clearImageSelection();
+        });
+
+        function clearImageSelection() {
+            imageInput.value = '';
+            imageThumb.src = '';
+            imageName.textContent = '';
+            imageSize.textContent = '';
+            imagePreview.classList.add('hidden');
+        }
+
         // 发送文本
         async function sendText() {
             const text = textInput.value.trim();
-            if (!text) return;
+            const imageFile = imageInput.files && imageInput.files[0];
+            
+            // 只有文字和图片都为空时才阻止发送
+            if (!text && !imageFile) return;
+
+            if (imageFile) {
+                const allowed = ['image/jpeg', 'image/png', 'image/webp'];
+                const extOk = allowed.includes(imageFile.type) || /\.(jpg|jpeg|png|webp)$/i.test(imageFile.name);
+                if (!extOk) {
+                    showError('仅支持 jpg/jpeg/png/webp 图片');
+                    return;
+                }
+                if (imageFile.size > MAX_IMAGE_SIZE) {
+                    showError('图片大小超出 2MB 限制');
+                    return;
+                }
+            }
 
             try {
                 updateUI('processing');
                 textInput.disabled = true;
                 btnSend.disabled = true;
+                btnImage.disabled = true;
 
-                const response = await fetch('/api/text_chat', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ 
-                        text: text,
-                        audio_id: lastAudioId  // 传递 audio_id
-                    })
-                });
+                let response;
+                if (imageFile) {
+                    const formData = new FormData();
+                    formData.append('text', text || '');  // 允许空字符串
+                    if (lastAudioId) {
+                        formData.append('audio_id', lastAudioId);
+                    }
+                    formData.append('image', imageFile);
+                    response = await fetch('/api/query', {
+                        method: 'POST',
+                        body: formData
+                    });
+                } else {
+                    response = await fetch('/api/query', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ 
+                            text: text,
+                            audio_id: lastAudioId  // 传递 audio_id
+                        })
+                    });
+                }
 
                 const data = await response.json();
 
@@ -616,6 +763,7 @@
                     textInput.value = ''; // 清空输入框
                     lastAudioId = null; // 重置 audio_id
                     recognitionResult.style.display = 'none'; // 隐藏识别结果区域
+                    clearImageSelection();
                 } else {
                     showError(data.error || '处理失败，请重试');
                 }
@@ -626,6 +774,7 @@
                 updateUI('idle');
                 textInput.disabled = false;
                 btnSend.disabled = false;
+                btnImage.disabled = false;
                 textInput.focus();
             }
         }
