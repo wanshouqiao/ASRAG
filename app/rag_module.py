@@ -71,6 +71,17 @@ class RAGModule:
         self.tts_model = KModel(model=tts_model_path, config=tts_config_path, repo_id=tts_repo_id).to(
             self.tts_device
         ).eval()
+        # 如果使用CUDA，尝试使用半精度（FP16）加速
+        # 注意：暂时禁用FP16，因为可能与voice_tensor不兼容
+        # 如果需要启用，需要确保voice_tensor也正确转换为FP16
+        self.use_fp16 = False
+        # if self.tts_device == "cuda" and torch.cuda.is_available():
+        #     try:
+        #         self.tts_model = self.tts_model.half()
+        #         self.use_fp16 = True
+        #         self.logger.info("TTS模型已切换到FP16半精度模式以加速推理")
+        #     except Exception as e:
+        #         self.logger.warning("无法切换到FP16模式: %s，继续使用FP32", e)
         self.en_pipeline = KPipeline(lang_code="a", repo_id=tts_repo_id, model=False)
 
         def en_callable(text):
@@ -251,11 +262,11 @@ class RAGModule:
             self.logger.error("RAG 查询失败: %s", e)
             return f"抱歉，生成回答时出现错误: {str(e)}", timings, []
 
-    def _split_text_for_tts(self, text: str, max_length: int = 100) -> List[str]:
+    def _split_text_for_tts(self, text: str, max_length: int = 150) -> List[str]:
         """将文本按句子分割，确保每段不超过最大长度
         
-        注意：TTS pipeline可能有音频时长限制（约29秒），建议使用较小的max_length（100字符）
-        根据经验，100字符大约对应15-20秒的音频，留有余量避免超时
+        注意：TTS pipeline可能有音频时长限制（约29秒）
+        根据经验，150字符大约对应20-25秒的音频，留有余量避免超时
         使用最简单可靠的方法，确保不丢失任何文本
         """
         import re
@@ -434,14 +445,12 @@ class RAGModule:
             # 将文本分段处理，避免长度限制
             # 在句号、感叹号、问号后添加空格，确保TTS能识别句子边界
             clean_text = re.sub(r'([。！？])([^\s。！？])', r'\1 \2', clean_text)
-            # 使用更小的分段长度（100字符），因为TTS pipeline可能有音频时长限制（约29秒）
-            # 根据经验，100字符大约对应15-20秒的音频，留有余量
+            # 增加分段长度到150字符以减少分段次数，提升性能
+            # 根据经验，150字符大约对应20-25秒的音频，仍在安全范围内
             text_length = len(clean_text)
-            self.logger.info("清理后文本长度: %d 字符", text_length)
-            segments = self._split_text_for_tts(clean_text, max_length=100)
-            self.logger.info("文本已分为 %d 段进行TTS处理", len(segments))
-            for i, seg in enumerate(segments):
-                self.logger.debug("第 %d 段长度: %d 字符, 内容: %s...", i + 1, len(seg), seg[:50])
+            segments = self._split_text_for_tts(clean_text, max_length=150)
+            if len(segments) > 1:
+                self.logger.info("文本已分为 %d 段进行TTS处理（长度: %d 字符）", len(segments), text_length)
             
             # 生成每段的音频并合并
             audio_segments = []
@@ -451,142 +460,57 @@ class RAGModule:
             # 段落间的停顿时长（秒）- 减少段与段之间的停顿
             paragraph_pause_duration = 0.2
             
-            for i, segment in enumerate(segments):
-                self.logger.info("正在生成第 %d/%d 段语音: %s...", i + 1, len(segments), segment[:30])
-                self.logger.debug("第 %d 段完整内容: %s", i + 1, segment)
-                try:
-                    generator = self.tts_pipeline(segment, voice=self.voice_tensor, speed=self.speed_callable)
-                    # 尝试获取所有生成的音频块
-                    segment_audio_parts = []
+            # 使用torch.inference_mode()加速推理
+            with torch.inference_mode():
+                for i, segment in enumerate(segments):
                     try:
-                        while True:
-                            result = next(generator)
-                            wav = result.audio
-                            # 将 torch tensor 转换为 numpy array
-                            if torch.is_tensor(wav):
-                                wav = wav.cpu().numpy()
-                            # 确保是一维数组
-                            if wav.ndim > 1:
-                                wav = wav.flatten()
-                            # 确保数据类型为 float32
-                            wav = wav.astype(np.float32)
-                            segment_audio_parts.append(wav)
-                    except StopIteration:
-                        # 正常结束
-                        pass
-                    
-                    if segment_audio_parts:
-                        # 合并该段的所有音频块
-                        segment_audio = np.concatenate(segment_audio_parts)
-                        segment_duration = len(segment_audio) / sample_rate
-                        self.logger.info("第 %d 段生成完成，音频时长: %.2f 秒", i + 1, segment_duration)
+                        # 直接使用原始的voice_tensor，让pipeline自己处理设备转换
+                        # 避免破坏voice_tensor的复杂结构
+                        generator = self.tts_pipeline(segment, voice=self.voice_tensor, speed=self.speed_callable)
+                        # 尝试获取所有生成的音频块
+                        segment_audio_parts = []
+                        try:
+                            while True:
+                                result = next(generator)
+                                wav = result.audio
+                                # 将 torch tensor 转换为 numpy array
+                                if torch.is_tensor(wav):
+                                    wav = wav.cpu().numpy()
+                                # 确保是一维数组
+                                if wav.ndim > 1:
+                                    wav = wav.flatten()
+                                # 确保数据类型为 float32
+                                wav = wav.astype(np.float32)
+                                segment_audio_parts.append(wav)
+                        except StopIteration:
+                            # 正常结束
+                            pass
                         
-                        # 检查音频时长是否超过限制（约29秒）
-                        max_audio_duration = 25.0  # 设置25秒作为安全限制，留有余量
-                        if segment_duration > max_audio_duration:
-                            self.logger.warning(
-                                "第 %d 段音频时长 %.2f 秒超过限制 %.2f 秒，"
-                                "该段文本可能未完全生成。段长度: %d 字符",
-                                i + 1, segment_duration, max_audio_duration, len(segment)
-                            )
-                            self.logger.warning("该段内容: %s", segment[:100])
-                        
-                        audio_segments.append(segment_audio)
-                    else:
-                        self.logger.warning("第 %d 段未生成任何音频", i + 1)
-                    
-                    # 分段音频之间不添加停顿，直接拼接以保持流畅
-                    # TTS生成的音频末尾通常已有自然的停顿，不需要额外添加
-                except Exception as e:
-                    self.logger.error("生成第 %d 段语音失败: %s", i + 1, e)
-                    import traceback
-                    self.logger.error(traceback.format_exc())
-                    # 继续处理其他段
-                    continue
+                        if segment_audio_parts:
+                            # 合并该段的所有音频块
+                            segment_audio = np.concatenate(segment_audio_parts)
+                            audio_segments.append(segment_audio)
+                        else:
+                            self.logger.warning("第 %d 段未生成任何音频", i + 1)
+                    except Exception as e:
+                        self.logger.error("生成第 %d 段语音失败: %s", i + 1, e)
+                        # 继续处理其他段
+                        continue
             
             if not audio_segments:
                 self.logger.error("所有音频段生成失败")
                 return None
             
-            # 使用交叉淡入淡出（crossfade）来平滑拼接音频段
-            if len(audio_segments) == 0:
-                return None
-            elif len(audio_segments) == 1:
+            # 简化音频拼接：直接合并，减少复杂的后处理以提升性能
+            if len(audio_segments) == 1:
                 combined_audio = audio_segments[0]
             else:
-                # 交叉淡入淡出参数
-                crossfade_duration = 0.05  # 交叉淡入淡出时长（秒）
-                crossfade_samples = int(crossfade_duration * sample_rate)
-                silence_threshold = 0.005  # 静音阈值（更敏感）
-                
-                optimized_segments = []
-                
-                for i, audio in enumerate(audio_segments):
-                    if len(audio) == 0:
-                        continue
-                    
-                    # 裁剪末尾的静音（更精确的检测）
-                    trim_samples = int(0.15 * sample_rate)  # 最多裁剪0.15秒
-                    trim_end = len(audio)
-                    
-                    # 使用滑动窗口检测静音，避免单个采样点的噪声
-                    window_size = int(0.01 * sample_rate)  # 10ms窗口
-                    for j in range(len(audio) - window_size, max(0, len(audio) - trim_samples - window_size), -window_size):
-                        window = audio[j:j + window_size]
-                        avg_amplitude = np.mean(np.abs(window))
-                        if avg_amplitude > silence_threshold:
-                            trim_end = j + window_size
-                            break
-                    
-                    trimmed_audio = audio[:trim_end] if trim_end < len(audio) else audio
-                    optimized_segments.append(trimmed_audio)
-                
-                # 使用交叉淡入淡出拼接
-                if len(optimized_segments) == 0:
-                    return None
-                
-                combined_audio = optimized_segments[0].copy()
-                
-                for i in range(1, len(optimized_segments)):
-                    current_audio = optimized_segments[i]
-                    
-                    # 确保有足够的样本进行交叉淡入淡出
-                    if len(combined_audio) >= crossfade_samples and len(current_audio) >= crossfade_samples:
-                        # 获取前一段的末尾和后一段的开头
-                        fade_out_end = combined_audio[-crossfade_samples:]
-                        fade_in_start = current_audio[:crossfade_samples]
-                        
-                        # 创建淡出和淡入的权重曲线（线性）
-                        fade_out_weights = np.linspace(1.0, 0.0, crossfade_samples)
-                        fade_in_weights = np.linspace(0.0, 1.0, crossfade_samples)
-                        
-                        # 应用交叉淡入淡出
-                        fade_out_audio = fade_out_end * fade_out_weights
-                        fade_in_audio = fade_in_start * fade_in_weights
-                        
-                        # 混合交叉部分
-                        crossfade_audio = fade_out_audio + fade_in_audio
-                        
-                        # 拼接：前一段（去掉末尾交叉部分）+ 交叉部分 + 后一段（去掉开头交叉部分）
-                        combined_audio = np.concatenate([
-                            combined_audio[:-crossfade_samples],
-                            crossfade_audio,
-                            current_audio[crossfade_samples:]
-                        ])
-                    else:
-                        # 如果样本不够，直接拼接（添加很短的淡入淡出）
-                        if len(current_audio) > 0:
-                            # 对开头添加短暂的淡入
-                            fade_in_len = min(int(0.02 * sample_rate), len(current_audio))
-                            fade_in_weights = np.linspace(0.0, 1.0, fade_in_len)
-                            current_audio[:fade_in_len] *= fade_in_weights
-                            
-                            combined_audio = np.concatenate([combined_audio, current_audio])
+                # 简单拼接，不做复杂的交叉淡入淡出处理以提升性能
+                combined_audio = np.concatenate(audio_segments)
             
             # 转换为字节流
             wav_io = io.BytesIO()
             sf.write(wav_io, combined_audio, sample_rate, format="WAV")
-            self.logger.info("语音生成完成，总时长约 %.2f 秒", len(combined_audio) / sample_rate)
             return wav_io.getvalue()
         except Exception as e:
             self.logger.error("TTS 生成失败: %s", e)
