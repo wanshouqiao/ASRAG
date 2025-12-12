@@ -266,6 +266,31 @@
             display: none !important;
         }
 
+        /* 移动端适配 */
+        @media (max-width: 640px) {
+            #chatInputBar {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            #chatInputBar input[type="text"],
+            #chatInputBar button {
+                width: 100%;
+            }
+            #chatInputBar button {
+                min-height: 44px;
+                font-size: 16px;
+            }
+            #imagePreview {
+                width: 100%;
+            }
+            .admin-link {
+                top: 12px;
+                right: 12px;
+                padding: 6px 12px;
+                font-size: 0.85em;
+            }
+        }
+
         .image-preview img {
             width: 60px;
             height: 60px;
@@ -333,11 +358,11 @@
             </div>
         </div>
 
-        <div class="result-section" style="margin-top:15px; display:flex; gap: 10px; align-items: center;">
+        <div id="chatInputBar" class="result-section" style="margin-top:15px; display:flex; gap: 10px; align-items: center;">
             <input type="text" id="textInput" placeholder="或者在这里输入文字提问..." style="flex: 1; padding: 10px; border-radius: 5px; border: 1px solid #ddd;">
             <input type="file" id="imageInput" accept="image/png,image/jpeg,image/webp" class="hidden">
-            <button id="btnImage" class="btn-record" style="padding: 10px 14px; white-space: nowrap;">📷 上传图片</button>
-            <button id="btnSend" class="btn-record" style="padding: 10px 20px;">发送</button>
+            <button id="btnImage" class="btn-record" style="padding: 10px 14px; white-space: nowrap; background:#42A5F5;">📷 上传图片</button>
+            <button id="btnSend" class="btn-record" style="padding: 10px 20px; background:#1E88E5;">发送</button>
         </div>
         <div id="imagePreview" class="image-preview hidden">
             <img id="imageThumb" alt="预览">
@@ -1495,7 +1520,13 @@ async function sendRecognizedToLLM(text) {
                         hint.style.display = 'block';
                         const link = document.getElementById('ssl-auth-link');
                         // 将 wss:// 转为 https:// 供用户点击访问
-                        if(link) link.href = 'https://192.168.137.2:1337';
+                        if (link) {
+                            const loc = window.location;
+                            const host = loc.hostname || 'localhost';
+                            const port = loc.port ? `:${loc.port}` : '';
+                            // 去掉当前端口后，改为 1337
+                            link.href = `${loc.protocol}//${host}:1337`;
+                        }
                     }
                 }
 

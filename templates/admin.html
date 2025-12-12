@@ -117,7 +117,7 @@
     function showLogin(){ loginMask.style.display='flex'; loginError.style.display='none'; loginError.textContent=''; }
     function hideLogin(){ loginMask.style.display='none'; }
 
-    btnLogin.onclick = async ()=>{
+    async function doLogin(){
       const u = loginUser.value.trim();
       const p = loginPass.value.trim();
       if(!u || !p){ loginError.textContent='请输入用户名和密码'; loginError.style.display='block'; return; }
@@ -127,7 +127,11 @@
         if(j && j.success && j.token){ setToken(j.token); hideLogin(); await initAdmin(); }
         else { loginError.textContent = '登录失败：'+(j && j.error || '未知错误'); loginError.style.display='block'; }
       }catch(e){ loginError.textContent='登录出错：'+e.message; loginError.style.display='block'; }
-    };
+    }
+
+    btnLogin.onclick = doLogin;
+    loginUser.addEventListener('keypress', (e)=>{ if(e.key==='Enter') doLogin(); });
+    loginPass.addEventListener('keypress', (e)=>{ if(e.key==='Enter') doLogin(); });
 
     btnLogout.onclick = ()=>{ clearToken(); showLogin(); };
 
