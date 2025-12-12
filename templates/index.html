@@ -261,6 +261,11 @@
             border-radius: 8px;
         }
 
+        /* 保证未选图时隐藏预览 */
+        .image-preview.hidden {
+            display: none !important;
+        }
+
         .image-preview img {
             width: 60px;
             height: 60px;
@@ -328,7 +333,7 @@
             </div>
         </div>
 
-        <div class="result-section" style="margin-top:15px; display:none; gap: 10px;">
+        <div class="result-section" style="margin-top:15px; display:flex; gap: 10px; align-items: center;">
             <input type="text" id="textInput" placeholder="或者在这里输入文字提问..." style="flex: 1; padding: 10px; border-radius: 5px; border: 1px solid #ddd;">
             <input type="file" id="imageInput" accept="image/png,image/jpeg,image/webp" class="hidden">
             <button id="btnImage" class="btn-record" style="padding: 10px 14px; white-space: nowrap;">📷 上传图片</button>

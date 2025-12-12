@@ -14,6 +14,7 @@ import uuid
 from pathlib import Path
 
 from flask import Flask, jsonify, render_template, request, abort, send_file
+from werkzeug.exceptions import HTTPException
 
 from app.asr_module import ASRModule
 from app.rag_module import RAGModule
@@ -59,6 +60,17 @@ def after_request(response):
     response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
     response.headers.add("Access-Control-Allow-Methods", "GET,PUT,POST,DELETE,OPTIONS")
     return response
+
+
+@app.errorhandler(Exception)
+def handle_exceptions(err):
+    """
+    捕获未处理异常，统一返回 JSON，避免前端收到 HTML 导致 JSON 解析报错。
+    """
+    if isinstance(err, HTTPException):
+        return jsonify({"error": err.description, "code": err.code}), err.code
+    logger.exception("未处理异常: %s", err)
+    return jsonify({"error": "服务器内部错误"}), 500
 
 
 # 路径与配置（ROOT_DIR 为项目根目录）
@@ -237,8 +249,6 @@ def query():
             image_file = request.files.get("image")
 
             if image_file and image_file.filename:
-                import uuid
-
                 # 基础校验
                 allowed_ext = {"jpg", "jpeg", "png", "webp"}
                 _, ext = os.path.splitext(image_file.filename)
@@ -330,6 +340,63 @@ def query():
         )
     except Exception as e:
         logger.error("对话 API 错误: %s", e)
+        return jsonify({"error": str(e)}), 500
+
+
+# --- 纯文本聊天（供语音识别直接调用）---
+@app.route("/api/text_chat", methods=["POST"])
+def text_chat():
+    start_time = time.time()
+    timings = {}
+    try:
+        data = request.get_json() or {}
+        text = (data.get("text") or "").strip()
+        audio_id = data.get("audio_id")
+
+        if not text:
+            return jsonify({"error": "输入文本不能为空"}), 400
+
+        t0 = time.time()
+        answer, rag_timings, sources = rag_module.query(question=text)
+        timings["rag_time"] = time.time() - t0
+        timings.update(rag_timings)
+
+        t0 = time.time()
+        audio_bytes = rag_module.text_to_speech(answer)
+        timings["tts_time"] = time.time() - t0
+        timings["total_time"] = time.time() - start_time
+
+        if audio_bytes:
+            audio_id = str(uuid.uuid4())
+            audio_path = os.path.join(TEMP_AUDIO_DIR, f"{audio_id}.wav")
+            with open(audio_path, "wb") as f:
+                f.write(audio_bytes)
+            audio_url = f"/api/audio/{audio_id}"
+            return jsonify(
+                {
+                    "success": True,
+                    "recognized_text": text,
+                    "answer": answer,
+                    "audio": audio_url,
+                    "audio_id": audio_id,
+                    "timings": timings,
+                    "sources": sources,
+                }
+            )
+
+        return jsonify(
+            {
+                "success": True,
+                "recognized_text": text,
+                "answer": answer,
+                "audio": None,
+                "audio_id": audio_id,
+                "timings": timings,
+                "sources": sources,
+            }
+        )
+    except Exception as e:
+        logger.error("text_chat API 错误: %s", e)
         return jsonify({"error": str(e)}), 500
 
 

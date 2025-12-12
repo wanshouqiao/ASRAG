@@ -67,7 +67,7 @@
     <div class="card" id="cardFiles">
       <h2>文件管理 / 知识库</h2>
       <div class="row">
-        <input type="file" id="fileInput" accept=".txt,.md,.pdf" />
+        <input type="file" id="fileInput" accept=".txt,.md,.pdf,.jpg,.jpeg,.png,.webp,.gif,.bmp,image/*" />
         <button id="btnUpload" class="primary">上传并添加到知识库</button>
         <span id="uploadStatus" class="muted"></span>
       </div>
@@ -189,16 +189,21 @@
         fileList.innerHTML = arr.map(f=>{
           const date = new Date(f.mtime*1000).toLocaleString();
           const size = (f.size/1024).toFixed(1)+' KB';
-          return `<li><div><div>${f.name}</div><div class='muted'>${date} · ${size}</div></div><button class='warn' onclick="deleteFile(this,'${f.name}')">删除</button></li>`;
+          const fileType = f.file_type || 'document';
+          const typeIcon = fileType === 'image' ? '🖼️' : '📄';
+          const typeLabel = fileType === 'image' ? '图片' : '文档';
+          const safeName = (f.name || '').replace(/'/g, "\\'");
+          return `<li><div><div>${typeIcon} ${f.name} <span class='muted'>(${typeLabel})</span></div><div class='muted'>${date} · ${size}</div></div><button class='warn' onclick="deleteFile(this,'${safeName}','${fileType}')">删除</button></li>`;
         }).join('');
       }catch(e){ fileList.innerHTML='<li class="muted">加载出错</li>'; }
     }
 
-    window.deleteFile = async function(btn, filename){
-      if(!confirm(`确定要删除文件 "${filename}" 吗？这将重建知识库，可能需要一点时间。`)) return;
+    window.deleteFile = async function(btn, filename, fileType){
+      const fileTypeLabel = fileType === 'image' ? '图片' : '文档';
+      if(!confirm(`确定要删除${fileTypeLabel} "${filename}" 吗？这将重建知识库，可能需要一点时间。`)) return;
       try{
         const ori = btn.textContent; btn.textContent='删除中...'; btn.disabled=true;
-        const r = await fetch('/api/files',{ method:'DELETE', headers:{'Content-Type':'application/json', ...authHeaders()}, body: JSON.stringify({filename}) });
+        const r = await fetch('/api/files',{ method:'DELETE', headers:{'Content-Type':'application/json', ...authHeaders()}, body: JSON.stringify({filename, file_type:fileType}) });
         const j = await r.json();
         if(j && j.success){ await loadFiles(); }
         else { alert('删除失败：'+(j && j.error||'未知错误')); btn.textContent=ori; btn.disabled=false; }
