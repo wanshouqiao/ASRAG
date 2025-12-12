@@ -220,6 +220,28 @@
         .hidden {
             display: none;
         }
+
+        .admin-link {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+            font-size: 0.9em;
+            color: #1976d2;
+            text-decoration: none;
+            padding: 8px 16px;
+            background: rgba(255, 255, 255, 0.9);
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+            transition: all 0.3s;
+        }
+
+        .admin-link:hover {
+            background: rgba(255, 255, 255, 1);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+            transform: translateY(-2px);
+        }
+
         /* 语音动效（用户说话/AI说话）*/
         .equalizer { display:flex; gap:3px; align-items:flex-end; height:22px; }
         .equalizer span { width:3px; background:#4CAF50; display:block; border-radius:2px; height:8px; transition: height .08s linear; }
@@ -230,12 +252,10 @@
     </style>
 </head>
 <body>
+    <a href="/admin" class="admin-link">进入管理端 ▶</a>
     <div class="container">
         <h1>🎤 语音 RAG 问答系统</h1>
-        <p class="subtitle">点击录音按钮，说出您的问题，AI 将基于知识库为您解答</p>
-        <div style="text-align:right; margin-top:6px;">
-            <a href="/admin" style="font-size: 0.9em; color:#1976d2; text-decoration:none;">进入管理端 ▶</a>
-        </div>
+        <p class="subtitle">说出您的问题，AI 将基于知识库为您解答</p>
 
         <div id="status" class="status idle">准备就绪</div>
 
@@ -250,15 +270,13 @@
 
         <!-- 唤醒词控制区 -->
         <div class="result-section" style="margin-top:15px;">
-            <h3>唤醒词</h3>
-            <div style="display:flex; gap:10px; align-items:center; flex-wrap: wrap; margin-top:10px;">
-                <label for="wakeWordInput">关键词：</label>
-                <input id="wakeWordInput" type="text" value="小云小云" style="padding:8px; border-radius:6px; border:1px solid #ddd; min-width: 160px;" />
-                <button id="btnWakeEnableMic" class="btn-record" style="background:#2196F3;">🎤 启用监听</button>
-                <button id="btnWakeBypass" class="btn-stop">⏭️ 跳过唤醒词</button>
+            <div style="display:flex; flex-direction:column; align-items:center; gap:10px; margin-top:10px;">
+                <div style="display:flex; gap:10px; align-items:center; justify-content:center; flex-wrap: wrap;">
+                    <button id="btnWakeEnableMic" class="btn-record" style="background:#2196F3;">🎤 启用监听</button>
+                    <button id="btnWakeBypass" class="btn-stop">⏭️ 跳过唤醒词</button>
+                </div>
                 <span id="wakeStatus" style="font-size:0.9em; color:#666;">初始化中...</span>
             </div>
-            <div style="font-size:0.85em; color:#888; margin-top:6px;">点击“启用监听”开启麦克风采集并在本地推流，后端仅在检测到唤醒词后才进入识别。也可点击“跳过唤醒词”直接开始识别。</div>
         </div>
 
         <!-- 语音识别结果区域 -->
@@ -985,13 +1003,13 @@
             status.className = `status ${state}`;
             switch(state) {
                 case 'idle':
-                    status.textContent = '准备就绪';
+                    // 如果已启用监听，显示唤醒词；否则显示"准备就绪"
+                    status.textContent = micEnabled ? `唤醒词：${WAKE_WORD}` : '准备就绪';
                     waveform.classList.add('hidden');
                     // 如果之前是处理状态，且麦克风已启用，且未唤醒，恢复唤醒词监听
                     if (previousState === 'processing' && micEnabled && ws && ws.readyState === 1 && !hasWoken) {
                         // 如果之前未唤醒，恢复唤醒词监听
-                        const ww = (wakeWordInput.value || '').trim();
-                        if (ww) sendCtrl({ wake_word: ww });
+                        sendCtrl({ wake_word: WAKE_WORD });
                         sendCtrl({ wake_word_enabled: true, is_speaking: true });
                     }
                     break;
@@ -1138,7 +1156,7 @@
         let hasWoken = false;      // 本轮是否已被唤醒（仅唤醒后才触发静音回退）
         let silenceGuardUntil = 0; // 唤醒后的静音保护期（毫秒时间戳）
 
-        const wakeWordInput = document.getElementById('wakeWordInput');
+        const WAKE_WORD = '小云小云'; // 唤醒词（硬编码）
 
         const btnWakeBypass = document.getElementById('btnWakeBypass');
 // 初始隐藏“跳过唤醒词”按钮，启用监听后再显示
@@ -1222,7 +1240,7 @@ async function sendRecognizedToLLM(text) {
                     is_speaking: true,
                     chunk_interval: 10,
                     wav_name: 'web',
-                    wake_word: wakeWordInput.value.trim() || '小云小云',
+                    wake_word: WAKE_WORD,
                     wake_word_enabled: false,
                 };
                 const hotwords = getHotwords();
@@ -1235,7 +1253,8 @@ async function sendRecognizedToLLM(text) {
                     try {
                         const msg = JSON.parse(ev.data);
                         if (msg.event === 'wake_listening') {
-                            setWakeStatus(`监听中：${msg.wake_word || wakeWordInput.value}`);
+                            setWakeStatus(`监听中：${msg.wake_word || WAKE_WORD}`);
+                            if (btnWakeBypass) btnWakeBypass.style.display = 'inline-block';
                             updateUI('idle');
                             // 回到等待唤醒状态
                             hasWoken = false;
@@ -1246,6 +1265,7 @@ async function sendRecognizedToLLM(text) {
                                 return;
                             }
                             setWakeStatus('已唤醒，开始识别...');
+                            if (btnWakeBypass) btnWakeBypass.style.display = 'none';
                             updateUI('recording');
                             // 用户说话阶段：开启录音动效
                             hasWoken = true;
@@ -1258,6 +1278,7 @@ async function sendRecognizedToLLM(text) {
                                 return;
                             }
                             setWakeStatus('已跳过唤醒词，直接识别中...');
+                            if (btnWakeBypass) btnWakeBypass.style.display = 'none';
                             updateUI('recording');
                             hasWoken = true;
                             silenceAccumMs = 0;
@@ -1468,6 +1489,8 @@ async function sendRecognizedToLLM(text) {
                 wakeBypassed = false; // 重置旁路状态
                 btnWakeEnableMic.textContent = '🎤 启用监听';
                 btnWakeEnableMic.style.background = '#2196F3';
+                // 隐藏"跳过唤醒词"按钮
+                if (btnWakeBypass) btnWakeBypass.style.display = 'none';
                 // 通知后端关闭唤醒监听
                 sendCtrl({ wake_word_enabled: false, is_speaking: false });
                 // 关闭并清理 WS，避免会话状态残留
@@ -1491,14 +1514,14 @@ async function sendRecognizedToLLM(text) {
                 const ok = await waitWsOpen(4000);
                 if(!ok){ wsResetting=false; setWakeStatus('连接后端失败，请重试'); return; }
                 // 2) 重新下发唤醒词并开启门控
-                const ww=(wakeWordInput.value||'').trim();
-                if(ww) sendCtrl({ wake_word: ww });
+                sendCtrl({ wake_word: WAKE_WORD });
                 sendCtrl({ wake_word_enabled: true, is_speaking: true });
                 // 3) 不停止本地麦克风采集，保持 processor/micStream 不变
-                // 4) UI 切为“空闲”（不显示录音动画），并直接提示监听中
+                // 4) UI 切为"空闲"（不显示录音动画），并直接提示监听中
                 setMicFabActive(false);
                 updateUI('idle');
-                setWakeStatus(`监听中：${ww || wakeWordInput.value || ''}`);
+                if (btnWakeBypass) btnWakeBypass.style.display = 'inline-block';
+                setWakeStatus(`监听中：${WAKE_WORD}`);
             }catch(e){ console.warn('resetToWakeListening error', e); }
             finally{ wsResetting = false; }
         }
@@ -1513,12 +1536,12 @@ async function softResetToWakeListening(reasonText){
         // 通知服务端结束本次讲话，清理缓存
         sendCtrl({ is_speaking: false });
         // 重新下发唤醒词与开启监听门控
-        const ww=(wakeWordInput.value||'').trim();
-        if(ww) sendCtrl({ wake_word: ww });
+        sendCtrl({ wake_word: WAKE_WORD });
         sendCtrl({ wake_word_enabled: true, is_speaking: true });
         // UI 切为“空闲”，不显示录音动画
         setMicFabActive(false);
         updateUI('idle');
+        if (btnWakeBypass) btnWakeBypass.style.display = 'inline-block';
         if (reasonText) setWakeStatus(reasonText); else setWakeStatus('已返回唤醒监听，等待唤醒词...');
     }catch(e){ console.warn('softResetToWakeListening error', e); }
 }
@@ -1543,8 +1566,7 @@ async function softResetToWakeListening(reasonText){
                     return;
                 }
                 // 重发唤醒词，确保以最新的词开始监听
-                const ww = (wakeWordInput.value || '').trim();
-                if (ww) sendCtrl({ wake_word: ww });
+                sendCtrl({ wake_word: WAKE_WORD });
                 // 开启监听
                 sendCtrl({ wake_word_enabled: true, is_speaking: true });
                 // 再启动本地麦克风推流
@@ -1554,16 +1576,13 @@ async function softResetToWakeListening(reasonText){
                 btnWakeEnableMic.textContent = '⏹️ 关闭监听';
                 btnWakeEnableMic.style.background = '#f44336';
                 setWakeStatus('麦克风已启用，正在监听唤醒词...');
+                updateUI('idle'); // 更新状态显示为"唤醒词：小云小云"
                 if (btnWakeBypass) btnWakeBypass.style.display = 'inline-block';
             } else {
                 await stopMicAndStream('已关闭监听');
             }
         });
 
-        // 修改唤醒词时，实时同步到后端
-        wakeWordInput.addEventListener('change', () => {
-            sendCtrl({ wake_word: wakeWordInput.value.trim() });
-        });
 
         // 热词更改后，也同步给 WS 后端
         document.getElementById('hotwordsInput').addEventListener('blur', () => {
