@@ -10,8 +10,10 @@ import logging
 import os
 import sys
 import time
+import uuid
+from pathlib import Path
 
-from flask import Flask, jsonify, render_template, request, abort
+from flask import Flask, jsonify, render_template, request, abort, send_file
 
 from app.asr_module import ASRModule
 from app.rag_module import RAGModule
@@ -63,9 +65,16 @@ def after_request(response):
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(APP_DIR)
 UPLOAD_DIR = os.path.join(ROOT_DIR, "uploads")
+TEMP_AUDIO_DIR = os.path.join(ROOT_DIR, "temp_audio")
 CONFIG_FILE = os.path.join(ROOT_DIR, "app_config.json")
 HOTWORDS_FILE = os.path.join(ROOT_DIR, "hotwords.txt")
 KB_PATH = os.path.join(ROOT_DIR, "knowledge.txt")
+
+# 确保临时音频目录存在
+os.makedirs(TEMP_AUDIO_DIR, exist_ok=True)
+
+# 确保临时音频目录存在
+os.makedirs(TEMP_AUDIO_DIR, exist_ok=True)
 
 asr_module = None
 rag_module = None
@@ -245,13 +254,20 @@ def text_chat():
         timings["tts_time"] = time.time() - t0
         timings["total_time"] = time.time() - start_time
         if audio_bytes:
-            audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
+            # 保存音频文件并返回URL，避免data URI长度限制
+            audio_id = str(uuid.uuid4())
+            audio_path = os.path.join(TEMP_AUDIO_DIR, f"{audio_id}.wav")
+            with open(audio_path, "wb") as f:
+                f.write(audio_bytes)
+            audio_size_mb = len(audio_bytes) / (1024 * 1024)
+            logger.info("音频文件已保存: %s, 大小: %.2f MB", audio_id, audio_size_mb)
+            audio_url = f"/api/audio/{audio_id}"
             return jsonify(
                 {
                     "success": True,
                     "recognized_text": text,
                     "answer": answer,
-                    "audio": f"data:audio/wav;base64,{audio_base64}",
+                    "audio": audio_url,
                     "audio_id": audio_id,
                     "timings": timings,
                     "sources": sources,
@@ -364,6 +380,20 @@ def manage_model():
         return jsonify({"error": str(e)}), 500
 
 
+# --- 音频文件端点 ---
+@app.route("/api/audio/<audio_id>", methods=["GET"])
+def get_audio(audio_id):
+    """返回临时音频文件"""
+    try:
+        audio_path = os.path.join(TEMP_AUDIO_DIR, f"{audio_id}.wav")
+        if not os.path.exists(audio_path):
+            return jsonify({"error": "音频文件不存在"}), 404
+        return send_file(audio_path, mimetype="audio/wav")
+    except Exception as e:
+        logger.error("获取音频文件失败: %s", e)
+        return jsonify({"error": str(e)}), 500
+
+
 # --- 识别并查询 ---
 @app.route("/api/recognize_and_query", methods=["POST"])
 def recognize_and_query():
@@ -389,13 +419,21 @@ def recognize_and_query():
         timings["tts_time"] = time.time() - t0
         timings["total_time"] = time.time() - start_time
         if audio_bytes:
-            audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
+            # 保存音频文件并返回URL，避免data URI长度限制
+            audio_id = str(uuid.uuid4())
+            audio_path = os.path.join(TEMP_AUDIO_DIR, f"{audio_id}.wav")
+            with open(audio_path, "wb") as f:
+                f.write(audio_bytes)
+            audio_size_mb = len(audio_bytes) / (1024 * 1024)
+            logger.info("音频文件已保存: %s, 大小: %.2f MB", audio_id, audio_size_mb)
+            audio_url = f"/api/audio/{audio_id}"
             return jsonify(
                 {
                     "success": True,
                     "recognized_text": recognized_text,
                     "answer": answer,
-                    "audio": f"data:audio/wav;base64,{audio_base64}",
+                    "audio": audio_url,
+                    "audio_id": audio_id,
                     "timings": timings,
                     "sources": sources,
                 }
