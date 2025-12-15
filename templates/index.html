@@ -1294,10 +1294,21 @@
                 if (audio) {
                     // 记录当前TTS音频，确保新回答到来时能关闭上一个
                     window._currentTtsAudio = audio;
-                    // 绑定 AI 说话动效
-                    audio.addEventListener('play', startAssistantEq);
-                    audio.addEventListener('ended', () => { stopAssistantEq(); if (window._currentTtsAudio===audio) window._currentTtsAudio=null; });
-                    audio.addEventListener('pause', () => { stopAssistantEq(); if (window._currentTtsAudio===audio) window._currentTtsAudio=null; });
+                    // 绑定 AI 说话动效及回声消除标志
+                    audio.addEventListener('play', () => {
+                        startAssistantEq();
+                        window._isAiSpeaking = true; // 标记 AI 正在说话
+                    });
+                    audio.addEventListener('ended', () => { 
+                        stopAssistantEq(); 
+                        window._isAiSpeaking = false; // 标记 AI 说话结束
+                        if (window._currentTtsAudio===audio) window._currentTtsAudio=null; 
+                    });
+                    audio.addEventListener('pause', () => { 
+                        stopAssistantEq(); 
+                        window._isAiSpeaking = false; // 标记 AI 说话暂停
+                        if (window._currentTtsAudio===audio) window._currentTtsAudio=null; 
+                    });
                     audio.play().catch(e => {
                         console.log('自动播放被阻止，用户需要手动点击播放');
                     });
@@ -1605,6 +1616,14 @@ async function sendRecognizedToLLM(text) {
                 processor.onaudioprocess = (e) => {
                     if (!ws || ws.readyState !== 1) return;
                     if (audioCtx.state === 'suspended') return; // 未激活则不处理
+                    
+                    // 回声消除：如果 AI 正在说话，则丢弃麦克风输入
+                    if (window._isAiSpeaking) {
+                        // 可选：清空 pendingPCM 以避免积压
+                        pendingPCM = new Int16Array(0);
+                        return;
+                    }
+
                     const input = e.inputBuffer.getChannelData(0);
                     const resampled = resampleTo16k(input, audioCtx.sampleRate);
                     const int16 = floatToPCM16Int16Array(resampled);
