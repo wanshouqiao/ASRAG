@@ -683,7 +683,7 @@ def main():
     print("请在浏览器中打开: http://localhost:7000")
     print("按 Ctrl+C 退出程序")
     print("=" * 60 + "\n")
-    app.run(host="0.0.0.0", port=7000, debug=debug_mode, ssl_context=("lucky.taila62a2b.ts.net.crt","lucky.taila62a2b.ts.net.key"))
+    app.run(host="::", port=7000, debug=debug_mode, ssl_context=("lucky.taila62a2b.ts.net.crt","lucky.taila62a2b.ts.net.key"))
 
 
 if __name__ == "__main__":

@@ -183,8 +183,25 @@ class VisualizedBGEEmbeddings(Embeddings):
 
         if text_items:
             idxs, text_batch = zip(*text_items)
-            text_vecs = self._encode_text_batch(list(text_batch))
-            for i, v in zip(idxs, text_vecs):
+            text_batch = list(text_batch)
+            
+            # 分批处理文本，防止显存溢出
+            batch_size = 8  # 减小 batch size 以节省显存
+            all_text_vecs = []
+            
+            for i in range(0, len(text_batch), batch_size):
+                batch = text_batch[i : i + batch_size]
+                try:
+                    batch_vecs = self._encode_text_batch(batch)
+                    all_text_vecs.extend(batch_vecs)
+                    # 清理显存
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                except Exception as e:
+                    logging.error(f"批次编码失败 (index {i}): {e}")
+                    raise e
+
+            for i, v in zip(idxs, all_text_vecs):
                 vectors[i] = v
 
         if any(len(v) == 0 for v in vectors):
