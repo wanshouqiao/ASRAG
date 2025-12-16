@@ -1345,6 +1345,7 @@
         let silenceAccumMs = 0;    // 连续静音累计时长(ms)
         let hasWoken = false;      // 本轮是否已被唤醒（仅唤醒后才触发静音回退）
         let silenceGuardUntil = 0; // 唤醒后的静音保护期（毫秒时间戳）
+        window.isPlayingWakeSound = false; // 是否正在播放唤醒提示音
 
         const WAKE_WORD = '乌萨奇'; // 唤醒词（硬编码）
 
@@ -1454,13 +1455,36 @@ async function sendRecognizedToLLM(text) {
                                 console.log('正在处理中，忽略唤醒词');
                                 return;
                             }
-                            setWakeStatus('已唤醒，开始识别...');
-                            if (btnWakeBypass) btnWakeBypass.style.display = 'none';
-                            updateUI('recording');
-                            // 用户说话阶段：开启录音动效
-                            hasWoken = true;
-                            silenceAccumMs = 0;
-                            silenceGuardUntil = Date.now() + SILENCE_GUARD_MS;
+
+                            // 暂时屏蔽录音
+                            window.isPlayingWakeSound = true;
+                            setWakeStatus('已唤醒，正在回应...');
+
+                            // 播放提示音
+                            const audio = new Audio('/static/here.mp3');
+                            
+                            const startRecording = () => {
+                                window.isPlayingWakeSound = false;
+                                setWakeStatus('已唤醒，开始识别...');
+                                if (btnWakeBypass) btnWakeBypass.style.display = 'none';
+                                updateUI('recording');
+                                // 用户说话阶段：开启录音动效
+                                hasWoken = true;
+                                silenceAccumMs = 0;
+                                silenceGuardUntil = Date.now() + SILENCE_GUARD_MS;
+                            };
+
+                            audio.onended = startRecording;
+                            audio.onerror = (e) => {
+                                console.error("播放唤醒提示音失败:", e);
+                                startRecording();
+                            };
+
+                            audio.play().catch(e => {
+                                console.error("播放唤醒提示音被阻止:", e);
+                                startRecording();
+                            });
+
                         } else if (msg.event === 'wake_word_bypassed') {
                             // 如果正在处理，忽略跳过唤醒词
                             if (status.className.includes('processing')) {
@@ -1501,25 +1525,7 @@ async function sendRecognizedToLLM(text) {
                                 if (autoSendTimer) clearTimeout(autoSendTimer);
                                 autoSendTimer = setTimeout(() => {
                                     if (!autoSendInFlight && lastPartialText.length > 0) {
-                                        // 过滤逻辑：如果识别结果以唤醒词开头（可能是用户重复说唤醒词），则去除
                                         let textToSend = lastPartialText;
-                                        // 使用已定义的常量 WAKE_WORD，而不是不存在的 wakeWordInput
-                                        const wakeWord = (typeof WAKE_WORD !== 'undefined') ? WAKE_WORD : '乌萨奇';
-                                        
-                                        if (wakeWord && textToSend.startsWith(wakeWord)) {
-                                            // 去除开头的唤醒词
-                                            textToSend = textToSend.substring(wakeWord.length).trim();
-                                            // 去除可能残留的标点符号（中文/英文逗号、句号、问号等）
-                                            textToSend = textToSend.replace(/^[，,。？！?!]+/, '').trim();
-                                        }
-
-                                        // 如果去除后为空，说明用户只是重复了唤醒词，忽略此次输入
-                                        if (textToSend.length === 0) {
-                                            console.log('忽略重复输入的唤醒词');
-                                            lastPartialText = ''; 
-                                            return;
-                                        }
-
                                         autoSendInFlight = true;
                                         sendRecognizedToLLM(textToSend).finally(() => {
                                             autoSendInFlight = false;
@@ -1625,7 +1631,7 @@ async function sendRecognizedToLLM(text) {
                 } else if (audioCtx.state === 'suspended') {
                     try { await audioCtx.resume(); } catch (_) {}
                 }
-                micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 } });
+                micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 } });
                 const source = audioCtx.createMediaStreamSource(micStream);
                 // 4096 帧，1 输入/输出通道
                 processor = audioCtx.createScriptProcessor(4096, 1, 1);
@@ -1635,13 +1641,10 @@ async function sendRecognizedToLLM(text) {
                 processor.onaudioprocess = (e) => {
                     if (!ws || ws.readyState !== 1) return;
                     if (audioCtx.state === 'suspended') return; // 未激活则不处理
+                    if (window.isPlayingWakeSound) return; // 正在播放唤醒提示音，暂停录音
                     
-                    // 回声消除：如果 AI 正在说话，则丢弃麦克风输入
-                    if (window._isAiSpeaking) {
-                        // 可选：清空 pendingPCM 以避免积压
-                        pendingPCM = new Int16Array(0);
-                        return;
-                    }
+                    // 回声消除：浏览器已开启 echoCancellation，此处不再丢弃数据
+                    // if (window._isAiSpeaking) { ... }
 
                     const input = e.inputBuffer.getChannelData(0);
                     const resampled = resampleTo16k(input, audioCtx.sampleRate);
