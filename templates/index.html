@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>语音 RAG 问答系统</title>
+    <title>煤矿用电安全智能问答系统</title>
     <style>
         * {
             margin: 0;
@@ -316,15 +316,12 @@
 <body>
     <a href="/admin" class="admin-link">进入管理端 ▶</a>
     <div class="container">
-        <h1>🎤 语音 RAG 问答系统</h1>
+        <h1>🎤 煤矿用电安全智能问答系统</h1>
         <p class="subtitle">说出您的问题，AI 将基于知识库为您解答</p>
 
         <div id="status" class="status idle">准备就绪</div>
 
-        <!-- SSL 自签证书信任提示 -->
-        <div id="ssl-auth-hint" style="display:none; text-align:center; margin-bottom:15px; background:#fff3cd; color:#856404; padding:10px; border-radius:8px; border:1px solid #ffeeba; font-size: 0.9em;">
-            ⚠️ 连接失败。如果是自签证书，请 <a id="ssl-auth-link" href="#" target="_blank" style="color:#856404; font-weight:bold; text-decoration:underline;">点击此处打开 WSS 服务</a><br>并选择“高级 -> 继续访问”或“接受风险”，然后刷新本页。
-        </div>
+        
 
         <div class="controls">
             <button id="btnClear" class="btn-clear">🗑️ 清空记录</button>
@@ -334,7 +331,7 @@
         <div class="result-section" style="margin-top:15px;">
             <div style="display:flex; flex-direction:column; align-items:center; gap:10px; margin-top:10px;">
                 <div style="display:flex; gap:10px; align-items:center; justify-content:center; flex-wrap: wrap;">
-                    <button id="btnWakeEnableMic" class="btn-record" style="background:#2196F3;">🎤 启用监听</button>
+                    <button id="btnWakeEnableMic" class="btn-record" style="background:#2196F3;">🎤 开始对话</button>
                     <button id="btnWakeBypass" class="btn-stop">⏭️ 跳过唤醒词</button>
                 </div>
                 <span id="wakeStatus" style="font-size:0.9em; color:#666;">初始化中...</span>
@@ -1421,7 +1418,7 @@ async function sendRecognizedToLLM(text) {
 
             ws.onopen = async () => {
                 wsConnected = true;
-                setWakeStatus('已连接后端，请点击“启用监听”开始唤醒词监听');
+                setWakeStatus('已连接后端，请点击“开始对话”开始唤醒词监听');
                 // 发送初始控制配置（合并关键参数，避免后端取不到）
                 const initMsg = {
                     mode: '2pass',
@@ -1548,23 +1545,6 @@ async function sendRecognizedToLLM(text) {
 
             ws.onclose = (ev) => {
                 console.log('WebSocket closed:', ev.code, ev.reason);
-                
-                // 如果从未连接成功就断开，很可能是证书问题或端口不通
-                if (!wsConnected && !wsResetting) {
-                    const hint = document.getElementById('ssl-auth-hint');
-                    if(hint) {
-                        hint.style.display = 'block';
-                        const link = document.getElementById('ssl-auth-link');
-                        // 将 wss:// 转为 https:// 供用户点击访问
-                        if (link) {
-                            const loc = window.location;
-                            const host = loc.hostname || 'localhost';
-                            const port = loc.port ? `:${loc.port}` : '';
-                            // 去掉当前端口后，改为 1337
-                            link.href = `${loc.protocol}//${host}:1337`;
-                        }
-                    }
-                }
 
                 wsConnected = false;
                 // 如果是我们主动的重启流程，不要抛出“连接已关闭”的提示
@@ -1713,7 +1693,7 @@ async function sendRecognizedToLLM(text) {
                 sentChunks = 0;
                 micEnabled = false;
                 wakeBypassed = false; // 重置旁路状态
-                btnWakeEnableMic.textContent = '🎤 启用监听';
+                btnWakeEnableMic.textContent = '🎤 开始对话';
                 btnWakeEnableMic.style.background = '#2196F3';
                 // 隐藏"跳过唤醒词"按钮
                 if (btnWakeBypass) btnWakeBypass.style.display = 'none';
@@ -1820,7 +1800,7 @@ async function softResetToWakeListening(reasonText){
         (async () => {
             
             initWebSocket();
-            setWakeStatus('请点击“启用监听”开始麦克风采集');
+            setWakeStatus('请点击“开始对话”开始麦克风采集');
         })();
         // ===== 结束：唤醒词 + WebSocket 实时流 =====
     </script>
