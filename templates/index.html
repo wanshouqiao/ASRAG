@@ -1412,7 +1412,8 @@ async function sendRecognizedToLLM(text) {
 
         function initWebSocket() {
             if (ws && (ws.readyState === 0 || ws.readyState === 1)) return; // 正在连或已连
-            ws = new WebSocket(wsUrl(), 'binary');
+            //ws = new WebSocket(wsUrl(), 'binary');
+            ws = new WebSocket("wss://hongyi.dns.army/asr/", 'binary');
             // 与官方 demo 一致，强制以 ArrayBuffer 处理二进制
             ws.binaryType = 'arraybuffer';
 
