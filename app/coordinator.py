@@ -31,7 +31,27 @@ APP_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(APP_DIR)
 TEMPLATE_DIR = os.path.join(ROOT_DIR, "templates")
 STATIC_DIR = os.path.join(ROOT_DIR, "static")
+
+# 配置 URL 前缀
+URL_PREFIX = "/wsq"
+
+# 自动剥离前缀
+class PrefixMiddleware(object):
+    def __init__(self, app, prefix=''):
+        self.app = app
+        self.prefix = prefix
+
+    def __call__(self, environ, start_response):
+        if environ['PATH_INFO'].startswith(self.prefix):
+            environ['PATH_INFO'] = environ['PATH_INFO'][len(self.prefix):]
+            environ['SCRIPT_NAME'] = self.prefix
+            return self.app(environ, start_response)
+        else:
+            start_response('404', [('Content-Type', 'text/plain')])
+            return ["This url does not belong to the app.".encode()]
+
 app = Flask(__name__, template_folder=TEMPLATE_DIR, static_folder=STATIC_DIR)
+app.wsgi_app = PrefixMiddleware(app.wsgi_app, prefix=URL_PREFIX)
 
 # ========== 管理端鉴权 ==========
 from functools import wraps
@@ -315,7 +335,8 @@ def query():
                 f.write(audio_bytes)
             audio_size_mb = len(audio_bytes) / (1024 * 1024)
             logger.info("音频文件已保存: %s, 大小: %.2f MB", audio_id, audio_size_mb)
-            audio_url = f"/api/audio/{audio_id}"
+            # 使用 URL_PREFIX 拼接音频 URL
+            audio_url = f"{URL_PREFIX}/api/audio/{audio_id}"
             return jsonify(
                 {
                     "success": True,
@@ -371,7 +392,8 @@ def text_chat():
             audio_path = os.path.join(TEMP_AUDIO_DIR, f"{audio_id}.wav")
             with open(audio_path, "wb") as f:
                 f.write(audio_bytes)
-            audio_url = f"/api/audio/{audio_id}"
+            # 使用 URL_PREFIX 拼接音频 URL
+            audio_url = f"{URL_PREFIX}/api/audio/{audio_id}"
             return jsonify(
                 {
                     "success": True,
@@ -606,7 +628,8 @@ def recognize_and_query():
                 f.write(audio_bytes)
             audio_size_mb = len(audio_bytes) / (1024 * 1024)
             logger.info("音频文件已保存: %s, 大小: %.2f MB", audio_id, audio_size_mb)
-            audio_url = f"/api/audio/{audio_id}"
+            # 使用 URL_PREFIX 拼接音频 URL
+            audio_url = f"{URL_PREFIX}/api/audio/{audio_id}"
             return jsonify(
                 {
                     "success": True,
@@ -683,7 +706,7 @@ def main():
     print("请在浏览器中打开: http://localhost:7000")
     print("按 Ctrl+C 退出程序")
     print("=" * 60 + "\n")
-    app.run(host="::", port=7000, debug=debug_mode)
+    app.run(host="::", port=5000, debug=debug_mode)
 
 
 if __name__ == "__main__":

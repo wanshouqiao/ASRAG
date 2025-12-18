@@ -314,7 +314,7 @@
     </style>
 </head>
 <body>
-    <a href="/admin" class="admin-link">进入管理端 ▶</a>
+    <a href="javascript:void(0)" onclick="window.location.href = window.API_PREFIX + '/admin'" class="admin-link">进入管理端 ▶</a>
     <div class="container">
         <h1>🎤 煤矿用电安全智能问答系统</h1>
         <p class="subtitle">说出您的问题，AI 将基于知识库为您解答</p>
@@ -433,6 +433,9 @@
     </div>
 
     <script>
+        // 动态获取 API 前缀，适配 /wsq 等反向代理路径
+        // request.script_root 会由 Flask 渲染为实际的 SCRIPT_NAME (例如 "/wsq" 或 "")
+        window.API_PREFIX = "{{ request.script_root }}";
 
         let lastAsrTime = 0; // 存储最后一次 ASR 耗时
         let lastAudioId = null; // 存储最后一次识别的 audio_id
@@ -490,7 +493,9 @@
         // 加载当前模型设置
         async function loadModelSettings() {
             try {
-                const response = await fetch('/api/model');
+                const response = await fetch(window.API_PREFIX + '/api/model', {
+                    credentials: 'include'
+                });
                 const data = await response.json();
                 if (data.success) {
                     modelSelect.value = data.current_model;
@@ -507,12 +512,13 @@
             modelSelect.disabled = true;
             
             try {
-                const response = await fetch('/api/model', {
+                const response = await fetch(window.API_PREFIX + '/api/model', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ model_type: modelType })
+                    body: JSON.stringify({ model_type: modelType }),
+                    credentials: 'include'
                 });
                 
                 const data = await response.json();
@@ -541,7 +547,9 @@
         // 加载文件列表
         async function loadFiles() {
             try {
-                const response = await fetch('/api/files');
+                const response = await fetch(window.API_PREFIX + '/api/files', {
+                    credentials: 'include'
+                });
                 const data = await response.json();
                 
                 if (data.success) {
@@ -610,7 +618,7 @@
                 btn.style.borderRadius = '5px';
                 btn.style.cursor = 'pointer';
 
-                const response = await fetch('/api/files', {
+                const response = await fetch(window.API_PREFIX + '/api/files', {
                     method: 'DELETE',
                     headers: {
                         'Content-Type': 'application/json'
@@ -618,7 +626,8 @@
                     body: JSON.stringify({ 
                         filename: filename,
                         file_type: fileType
-                    })
+                    }),
+                    credentials: 'include'
                 });
                 
                 const data = await response.json();
@@ -642,7 +651,9 @@
         // 加载热词配置
         async function loadHotwords() {
             try {
-                const response = await fetch('/api/hotwords');
+                const response = await fetch(window.API_PREFIX + '/api/hotwords', {
+                    credentials: 'include'
+                });
                 const data = await response.json();
                 if (data.hotwords) {
                     document.getElementById('hotwordsInput').value = data.hotwords;
@@ -656,12 +667,13 @@
         async function saveHotwords() {
             const hotwords = document.getElementById('hotwordsInput').value;
             try {
-                await fetch('/api/hotwords', {
+                await fetch(window.API_PREFIX + '/api/hotwords', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ hotwords: hotwords })
+                    body: JSON.stringify({ hotwords: hotwords }),
+                    credentials: 'include'
                 });
             } catch (error) {
                 console.error('保存热词失败:', error);
@@ -755,12 +767,13 @@
                         formData.append('audio_id', lastAudioId);
                     }
                     formData.append('image', imageFile);
-                    response = await fetch('/api/query', {
+                    response = await fetch(window.API_PREFIX + '/api/query', {
                         method: 'POST',
-                        body: formData
+                        body: formData,
+                        credentials: 'include'
                     });
                 } else {
-                    response = await fetch('/api/query', {
+                    response = await fetch(window.API_PREFIX + '/api/query', {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json'
@@ -768,7 +781,8 @@
                         body: JSON.stringify({ 
                             text: text,
                             audio_id: lastAudioId  // 传递 audio_id
-                        })
+                        }),
+                        credentials: 'include'
                     });
                 }
 
@@ -922,7 +936,7 @@
         // 保存识别数据到后端
         async function saveRecognitionData(recognizedText, correctedText = null) {
             try {
-                const response = await fetch('/api/save_recognition', {
+                const response = await fetch(window.API_PREFIX + '/api/save_recognition', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
@@ -930,7 +944,8 @@
                         recognized_text: recognizedText,
                         corrected_text: correctedText,
                         confidence: lastConfidence
-                    })
+                    }),
+                    credentials: 'include'
                 });
                 
                 const data = await response.json();
@@ -980,9 +995,10 @@
             uploadStatus.textContent = '正在上传并向量化...';
 
             try {
-                const resp = await fetch('/api/upload_kb', {
+                const resp = await fetch(window.API_PREFIX + '/api/upload_kb', {
                     method: 'POST',
-                    body: formData
+                    body: formData,
+                    credentials: 'include'
                 });
                 const data = await resp.json();
                 if (data.success) {
@@ -1045,9 +1061,10 @@
                 }
                 
                 // 改为只调用识别接口
-                const response = await fetch('/api/recognize', {
+                const response = await fetch(window.API_PREFIX + '/api/recognize', {
                     method: 'POST',
-                    body: formData
+                    body: formData,
+                    credentials: 'include'
                 });
                 
                 const data = await response.json();
@@ -1344,7 +1361,7 @@
         let silenceGuardUntil = 0; // 唤醒后的静音保护期（毫秒时间戳）
         window.isPlayingWakeSound = false; // 是否正在播放唤醒提示音
 
-        const WAKE_WORD = '乌萨奇'; // 唤醒词（硬编码）
+        const WAKE_WORD = '小毅小毅'; // 唤醒词（硬编码）
 
         const btnWakeBypass = document.getElementById('btnWakeBypass');
 // 初始隐藏“跳过唤醒词”按钮，启用监听后再显示
@@ -1358,10 +1375,11 @@ async function sendRecognizedToLLM(text) {
     const payload = { text: text, audio_id: null };
     try {
         updateUI('processing');
-        const resp = await fetch('/api/text_chat', {
+        const resp = await fetch(window.API_PREFIX + '/api/text_chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
+            body: JSON.stringify(payload),
+            credentials: 'include'
         });
         const data = await resp.json();
         if (data && data.success) {
@@ -1459,7 +1477,7 @@ async function sendRecognizedToLLM(text) {
                             setWakeStatus('已唤醒，正在回应...');
 
                             // 播放提示音
-                            const audio = new Audio('/static/here.mp3');
+                            const audio = new Audio(window.API_PREFIX + '/static/here.mp3');
                             
                             const startRecording = () => {
                                 window.isPlayingWakeSound = false;
@@ -1783,7 +1801,7 @@ async function softResetToWakeListening(reasonText){
                 btnWakeEnableMic.textContent = '⏹️ 关闭监听';
                 btnWakeEnableMic.style.background = '#f44336';
                 setWakeStatus('麦克风已启用，正在监听唤醒词...');
-                updateUI('idle'); // 更新状态显示为"唤醒词：乌萨奇"
+                updateUI('idle'); // 更新状态显示为"唤醒词：小毅小毅"
                 if (btnWakeBypass) btnWakeBypass.style.display = 'inline-block';
             } else {
                 await stopMicAndStream('已关闭监听');
