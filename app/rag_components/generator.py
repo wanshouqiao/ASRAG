@@ -43,8 +43,8 @@ class AnswerGenerator:
         """根据上下文和问题生成答案，自动处理多模态"""
         context = "\n\n".join(self._format_doc_content(d) for d in context_docs)
 
-        kb_image_paths = [
-            doc.metadata.get("source")
+        kb_images_with_titles = [
+            (doc.metadata.get("source"), doc.metadata.get("title", ""))
             for doc in context_docs
             if isinstance(doc.page_content, str)
             and doc.page_content.startswith("image://")
@@ -55,14 +55,14 @@ class AnswerGenerator:
         query_images = [query_image_path] if query_image_path else []
 
         use_vision = (
-            bool(kb_image_paths or query_images) and 
+            bool(kb_images_with_titles or query_images) and 
             self.llm_config[self.current_model_type].get("supports_vision", False)
         )
 
         answer = ""
         if use_vision:
             try:
-                vision_payload = self._build_vision_payload(question, context, kb_image_paths, query_images)
+                vision_payload = self._build_vision_payload(question, context, kb_images_with_titles, query_images)
                 logger.info("正在生成回答（图文）...")
                 answer = self._invoke_vision(vision_payload)
                 logger.info("回答生成完成（图文）")
@@ -89,7 +89,7 @@ class AnswerGenerator:
             return f"图片路径: {doc.page_content[len('image://'):]}"
         return doc.page_content
 
-    def _build_vision_payload(self, question: str, context: str, kb_image_paths: List[str], query_images: List[str]) -> Dict[str, Any]:
+    def _build_vision_payload(self, question: str, context: str, kb_images_with_titles: List[tuple[str, str]], query_images: List[str]) -> Dict[str, Any]:
         """
         将文本与图片封装为 OpenAI 风格的多模态消息，适配本地 llama.cpp server。
         """
@@ -122,46 +122,66 @@ class AnswerGenerator:
             for i, path in enumerate(query_images, 1):
                 if count >= max_imgs:
                     break
-                add_image_with_label(f"【用户图片{i}】", path)
+                add_image_with_label(f"【用户上传图片{i}】", path)
                 count += 1
-        if kb_image_paths and count < max_imgs:
-            for i, path in enumerate(kb_image_paths, 1):
+        if kb_images_with_titles and count < max_imgs:
+            for i, (path, title) in enumerate(kb_images_with_titles, 1):
                 if count >= max_imgs:
                     break
-                add_image_with_label(f"【知识库图片{i}】", path)
+                # 使用标题来丰富图片描述
+                label = f"【标准参考图片{i}: {title}】" if title else f"【标准参考图片{i}】"
+                add_image_with_label(label, path)
                 count += 1
 
-        if query_images and not context.strip():
-            kb_hint = "（知识库未命中文本）"
+        # --- 煤矿安全场景下的多模态提示词 ---
+        system_prompt = (
+            "你是一位资深的煤矿安全智能检测员。"
+            "你的任务是分析用户上传的现场图片，并依据知识库中存储的标准操作图片，来判断现场是否存在安全隐患或操作不规范之处。"
+        )
+
+        # 根据有无用户问题，动态构建主提示
+        if question.strip():
+            user_question_prompt = f"结合用户提出的问题：“{question}”，请进行分析。"
         else:
-            kb_hint = ""
+            user_question_prompt = "请直接对图片内容进行异常检测。"
+
+        main_prompt = f"""
+请严格遵循以下步骤进行分析：
+
+1. **场景识别**: 
+   首先，请仔细观察【用户上传图片】，识别并简要描述图片中的主要作业场景、设备或人员活动。
+
+2. **相关性判断**: 
+   接下来，请逐一对比【用户上传图片】和提供给你的每一张【标准参考图片】。判断哪些【标准参考图片】与【用户上传图片】展示的是**相同的设备或作业场景**。
+
+3. **异常检测与分析**:
+   - **如果**你找到了相关的【标准参考图片】：
+     请将【用户上传图片】与这些**相关的**【标准参考图片】进行详细比对。结合【相关文本信息】（如果有），清晰、具体地指出用户图片中存在的任何差异点，并判断这些差异是否构成安全隐患或操作不规范。请给出专业的分析和建议。
+   - **如果**所有【标准参考图片】都与用户图片的场景不相关：
+     请明确告知：“抱歉，知识库中未找到可供对比的相同场景的标准图片，无法进行有效的异常检测。”
+   - **如果**没有提供【标准参考图片】：
+     请基于你的通用知识，判断【用户上传图片】中是否存在明显的安全隐患。
+
+{user_question_prompt}
+"""
 
         text_parts = [
-            {
-                "type": "text",
-                "text": (
-                    "你是一个中文助理，请结合提供的知识库文本和图片，以及用户提供的图片，回答用户问题。"
-                    "如果缺少相关信息，就直接回答不知道。请尽量对比用户图片与知识库图片的相似与不同。"
-                ),
-            },
-            {
-                "type": "text",
-                "text": f"【知识库文本】{kb_hint}:\n{context}" if context else "【知识库文本】：无",
-            },
-            {"type": "text", "text": f"【用户问题】:\n{question}"},
+            {"type": "text", "text": main_prompt},
+            {"type": "text", "text": f"【相关文本信息】:\n{context}" if context.strip() else "【相关文本信息】: 无"},
         ]
 
+        # 将 user_content 的构建移到这里，并更新 system message
         user_content = text_parts + items
 
         config = self.llm_config[self.current_model_type]
         return {
             "model": config["model_name"],
             "messages": [
-                {"role": "system", "content": "你是一个仅依据给定内容回答的中文助手。"},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content},
             ],
             "temperature": 0.01,
-            "max_tokens": 512,
+            "max_tokens": 512,  # 可根据需要调整
         }
 
     def _invoke_vision(self, payload: Dict[str, Any]) -> str:

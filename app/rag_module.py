@@ -103,9 +103,13 @@ class RAGModule:
             for filename in os.listdir(images_dir):
                 file_path = os.path.join(images_dir, filename)
                 if os.path.isfile(file_path):
-                    doc = Document(page_content=f"image://{file_path}", metadata={"source": file_path, "type": "image"})
+                    title = os.path.splitext(filename)[0]
+                    doc = Document(
+                        page_content=f"image://{file_path}",
+                        metadata={"source": file_path, "type": "image", "title": title},
+                    )
                     all_docs.append(doc)
-                    self.logger.info("已添加图片: %s", filename)
+                    self.logger.info("已添加图片: %s (标题: %s)", filename, title)
 
         self.vector_store_manager.rebuild_from_documents(all_docs)
 
@@ -123,9 +127,14 @@ class RAGModule:
     def add_image(self, image_path: str):
         """添加单个图片到向量库"""
         try:
-            doc = Document(page_content=f"image://{image_path}", metadata={"source": image_path, "type": "image"})
+            filename = os.path.basename(image_path)
+            title = os.path.splitext(filename)[0]
+            doc = Document(
+                page_content=f"image://{image_path}",
+                metadata={"source": image_path, "type": "image", "title": title},
+            )
             self.vector_store_manager.add_documents([doc])
-            self.logger.info("图片已成功添加到知识库: %s", os.path.basename(image_path))
+            self.logger.info("图片已成功添加到知识库: %s (标题: %s)", filename, title)
         except Exception as e:
             self.logger.error("添加图片失败: %s", e)
             raise
