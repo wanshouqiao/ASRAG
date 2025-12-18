@@ -377,6 +377,20 @@ def text_chat():
         if not text:
             return jsonify({"error": "输入文本不能为空"}), 400
 
+        # 意图识别：判断是否为问题
+        if not rag_module.is_question(text):
+            logger.info(f"文本 '{text}' 被判定为非问题，停止处理")
+            return jsonify({
+                "success": True,
+                "recognized_text": text,
+                "answer": "", 
+                "audio": None,
+                "audio_id": audio_id,
+                "timings": {"total_time": time.time() - start_time},
+                "sources": [],
+                "ignored": True
+            })
+
         t0 = time.time()
         answer, rag_timings, sources = rag_module.query(question=text)
         timings["rag_time"] = time.time() - t0
@@ -612,6 +626,20 @@ def recognize_and_query():
         timings["asr_time"] = time.time() - t0
         if not recognized_text:
             return jsonify({"success": False, "error": "未能识别出文本，请重试"}), 400
+
+        # 意图识别
+        if not rag_module.is_question(recognized_text):
+            logger.info(f"文本 '{recognized_text}' 被判定为非问题，停止处理")
+            return jsonify({
+                "success": True,
+                "recognized_text": recognized_text,
+                "answer": "",
+                "audio": None,
+                "timings": {"asr_time": timings["asr_time"], "total_time": time.time() - start_time},
+                "sources": [],
+                "ignored": True
+            })
+
         t0 = time.time()
         answer, rag_timings, sources = rag_module.query(recognized_text)
         timings["rag_time"] = time.time() - t0

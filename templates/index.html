@@ -1383,7 +1383,20 @@ async function sendRecognizedToLLM(text) {
         });
         const data = await resp.json();
         if (data && data.success) {
-            displayResult(text, data.answer, data.audio, data.timings, data.sources, data.audio_id);
+            if (data.ignored) {
+                console.log('已忽略非问题文本:', text);
+                const statusDiv = document.getElementById('status');
+                // 临时显示提示
+                statusDiv.textContent = '非问题文本，已忽略';
+                setTimeout(() => {
+                    // 恢复状态显示（依赖 updateUI 逻辑，这里简单处理）
+                    if (statusDiv.textContent === '非问题文本，已忽略') {
+                         statusDiv.textContent = micEnabled ? `唤醒词：${WAKE_WORD}` : '准备就绪';
+                    }
+                }, 2000);
+            } else {
+                displayResult(text, data.answer, data.audio, data.timings, data.sources, data.audio_id);
+            }
         } else {
             showError(data && data.error ? data.error : '处理失败，请重试');
         }

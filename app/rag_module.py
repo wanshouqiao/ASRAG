@@ -25,6 +25,7 @@ from langchain_core.embeddings import Embeddings
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_community.vectorstores import FAISS
 from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from PIL import Image
 
@@ -463,6 +464,27 @@ class RAGModule:
         except Exception as e:
             self.logger.error("添加图片失败: %s", e)
             raise
+
+    def is_question(self, text: str) -> bool:
+        """
+        判断文本是否是问题或需要回答的请求。
+        """
+        if not text:
+            return False
+            
+        try:
+            messages = [
+                SystemMessage(content="你是一个意图识别助手。请判断用户的输入是否是煤矿用电安全相关的问题或请求。如果是，请只回复'YES'。如果不是（例如只是陈述句、感叹句、无意义的词语、自言自语等），请只回复'NO'。"),
+                HumanMessage(content=f"文本：{text}")
+            ]
+            response = self.llm.invoke(messages)
+            content = response.content.strip().upper()
+            self.logger.info(f"意图识别: '{text}' -> {content}")
+            
+            return "YES" in content
+        except Exception as e:
+            self.logger.error(f"意图识别失败: {e}")
+            return True 
 
     def query(self, question: str = "", image_path: str = None) -> Tuple[str, Dict, List[Dict]]:
         """
