@@ -55,6 +55,21 @@ class ASRModule:
             self.logger.error("读取热词文件失败: %s", e)
             return ""
 
+    def get_formatted_hotwords(self) -> str:
+        """读取热词文件并格式化为 SeacoParaformer 需要的空格分隔字符串"""
+        content = self.read_hotwords()
+        if not content:
+            return ""
+        lines = content.split('\n')
+        words = []
+        for line in lines:
+            part = line.strip()
+            if not part:
+                continue
+            # 保留权重，因为 SeacoParaformer 可能需要 "词 权重" 格式
+            words.append(part)
+        return " ".join(words)
+
     def write_hotwords(self, content: str):
         try:
             with open(self.hotwords_file, "w", encoding="utf-8") as f:
@@ -139,7 +154,8 @@ class ASRModule:
                     "is_speaking": True,
                 }
                 if hotwords:
-                    config["hotwords"] = hotwords.strip() if isinstance(hotwords, str) else str(hotwords)
+                    config["hotword"] = hotwords.strip() if isinstance(hotwords, str) else str(hotwords)
+                
                 ws.send(json.dumps(config))
                 chunk_size = 1920
                 for i in range(0, len(pcm_data), chunk_size):

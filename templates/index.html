@@ -1046,21 +1046,14 @@
                 let part = line.trim();
                 if (!part) continue;
                 
-                // 尝试分离权重（如果有），但目前只使用词本身，因为 SeacoParaformer 模型需要空格分隔的字符串
-                // 假设格式是 "词语 权重" 或 "词语"
-                const parts = part.split(/\s+/);
-                if (parts.length > 1) {
-                    const lastPart = parts[parts.length - 1];
-                    if (!isNaN(parseInt(lastPart))) {
-                        // 最后一个是数字，认为是权重，去掉它
-                        part = parts.slice(0, parts.length - 1).join(' ');
-                    }
-                }
-                if (part) words.push(part);
+                // 直接保留整行内容（包括权重），因为 SeacoParaformer 支持 "词语 权重" 格式
+                // 并且需要用空格将所有热词连接起来
+                words.push(part);
             }
             
-            // 返回空格分隔的字符串
-            return words.join(' ');
+            const result = words.join(' ');
+            console.log('DEBUG: getHotwords result:', result);
+            return result;
         }
 
         // 处理音频
@@ -1075,12 +1068,7 @@
                 // 发送到服务器
                 const formData = new FormData();
                 formData.append('audio', wavBlob, 'recording.wav');
-                
-                // 添加热词
-                const hotwords = getHotwords();
-                if (hotwords) {
-                    formData.append('hotwords', hotwords);
-                }
+               
                 
                 // 改为只调用识别接口
                 const response = await fetch(window.API_PREFIX + '/api/recognize', {
@@ -1843,6 +1831,8 @@ async function softResetToWakeListening(reasonText){
 // 跳过唤醒词
         btnWakeBypass.addEventListener('click', () => {
             unlockAudio(); // 尝试解锁音频
+            wakeBypassed = true;
+            sendCtrl({ wake_word_bypass: true });
             
             setWakeStatus('已跳过唤醒词，直接识别中...');
         });

@@ -158,11 +158,19 @@ def api_login():
 
 # --- 热词管理 ---
 @app.route("/api/hotwords", methods=["GET", "POST"])
-@require_auth
 def manage_hotwords():
     if request.method == "GET":
         content = asr_module.read_hotwords()
         return jsonify({"hotwords": content})
+    
+    # POST 请求需要鉴权
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return jsonify({"success": False, "error": "Unauthorized"}), 401
+    token = auth.split(" ", 1)[1].strip()
+    if token not in _VALID_TOKENS:
+        return jsonify({"success": False, "error": "Unauthorized"}), 401
+
     data = request.get_json()
     hotwords = data.get("hotwords", "")
     try:
@@ -180,7 +188,10 @@ def recognize():
             return jsonify({"error": "没有上传音频文件"}), 400
         audio_file = request.files["audio"]
         audio_data = audio_file.read()
-        hotwords = request.form.get("hotwords", "")
+        hotwords = request.form.get("hotwords")
+        if not hotwords:
+            hotwords = asr_module.get_formatted_hotwords()
+        
         t0 = time.time()
         recognized_text, confidence = asr_module.recognize_audio(audio_data, hotwords=hotwords)
         asr_time = time.time() - t0
