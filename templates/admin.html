@@ -34,7 +34,7 @@
   <header>
     <div class="title">管理端 - 语音 RAG 系统</div>
     <div class="right">
-      <a href="/">用户端</a>
+      <a href="javascript:void(0)" onclick="window.location.href = window.API_PREFIX + '/'">用户端</a>
       <button id="btnLogout">退出登录</button>
     </div>
   </header>
@@ -90,6 +90,10 @@
   </div>
 
   <script>
+    // 动态获取 API 前缀，适配 /wsq 等反向代理路径
+    // request.script_root 会由 Flask 渲染为实际的 SCRIPT_NAME (例如 "/wsq" 或 "")
+    window.API_PREFIX = "{{ request.script_root }}";
+
     // ==== 简易鉴权（需要后端提供 /api/login 返回 {success, token}）====
     const LS_TOKEN_KEY = 'auth_token';
     function setToken(t){ if(t){ localStorage.setItem(LS_TOKEN_KEY, t); } }
@@ -107,7 +111,10 @@
     async function ensureAuthed(){
       // 粗略校验：尝试拉取模型配置
       try{
-        const r = await fetch('/api/model', { headers: { 'Content-Type':'application/json', ...authHeaders() } });
+        const r = await fetch(window.API_PREFIX + '/api/model', { 
+          headers: { 'Content-Type':'application/json', ...authHeaders() },
+          credentials: 'include'
+        });
         const j = await r.json();
         if(j && (j.success!==false)) return true;
       }catch(_){ }
@@ -122,7 +129,12 @@
       const p = loginPass.value.trim();
       if(!u || !p){ loginError.textContent='请输入用户名和密码'; loginError.style.display='block'; return; }
       try{
-        const r = await fetch('/api/login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({username:u,password:p}) });
+        const r = await fetch(window.API_PREFIX + '/api/login', { 
+          method:'POST', 
+          headers:{'Content-Type':'application/json'}, 
+          body: JSON.stringify({username:u,password:p}),
+          credentials: 'include'
+        });
         const j = await r.json();
         if(j && j.success && j.token){ setToken(j.token); hideLogin(); await initAdmin(); }
         else { loginError.textContent = '登录失败：'+(j && j.error || '未知错误'); loginError.style.display='block'; }
@@ -148,7 +160,10 @@
 
     async function loadModelSettings(){
       try{
-        const r = await fetch('/api/model', { headers: { 'Content-Type':'application/json', ...authHeaders() } });
+        const r = await fetch(window.API_PREFIX + '/api/model', { 
+          headers: { 'Content-Type':'application/json', ...authHeaders() },
+          credentials: 'include'
+        });
         const j = await r.json();
         if(j && j.success && j.current_model){ modelSelect.value=j.current_model; }
       }catch(e){ modelStatus.textContent='加载失败'; }
@@ -157,7 +172,12 @@
       const modelType = modelSelect.value;
       modelStatus.textContent='正在切换...';
       try{
-        const r= await fetch('/api/model',{ method:'POST', headers:{'Content-Type':'application/json', ...authHeaders()}, body: JSON.stringify({model_type:modelType}) });
+        const r= await fetch(window.API_PREFIX + '/api/model',{ 
+          method:'POST', 
+          headers:{'Content-Type':'application/json', ...authHeaders()}, 
+          body: JSON.stringify({model_type:modelType}),
+          credentials: 'include'
+        });
         const j= await r.json();
         modelStatus.textContent = j.success ? '✅ 已切换' : '❌ 失败';
         if(!j.success) alert('切换失败：'+(j.error||'未知错误'));
@@ -167,7 +187,10 @@
 
     async function loadHotwords(){
       try{
-        const r = await fetch('/api/hotwords', { headers: { ...authHeaders() } });
+        const r = await fetch(window.API_PREFIX + '/api/hotwords', { 
+          headers: { ...authHeaders() },
+          credentials: 'include'
+        });
         const j = await r.json();
         if(j && j.hotwords){ hotwordsInput.value = j.hotwords; }
       }catch(_){ }
@@ -175,7 +198,12 @@
     btnSaveHot.onclick = async ()=>{
       try{
         hotwordsStatus.textContent='保存中...';
-        const r = await fetch('/api/hotwords', { method:'POST', headers:{'Content-Type':'application/json', ...authHeaders()}, body: JSON.stringify({hotwords: hotwordsInput.value}) });
+        const r = await fetch(window.API_PREFIX + '/api/hotwords', { 
+          method:'POST', 
+          headers:{'Content-Type':'application/json', ...authHeaders()}, 
+          body: JSON.stringify({hotwords: hotwordsInput.value}),
+          credentials: 'include'
+        });
         const j = await r.json();
         hotwordsStatus.textContent = j && j.success ? '✅ 已保存' : '❌ 失败';
         setTimeout(()=> hotwordsStatus.textContent='', 2000);
@@ -185,7 +213,10 @@
     async function loadFiles(){
       try{
         fileList.innerHTML = '<li class="muted">加载中...</li>';
-        const r = await fetch('/api/files', { headers: { ...authHeaders() } });
+        const r = await fetch(window.API_PREFIX + '/api/files', { 
+          headers: { ...authHeaders() },
+          credentials: 'include'
+        });
         const j = await r.json();
         if(!j || !j.success){ fileList.innerHTML='<li class="muted">加载失败</li>'; return; }
         const arr = j.files || [];
@@ -207,7 +238,12 @@
       if(!confirm(`确定要删除${fileTypeLabel} "${filename}" 吗？这将重建知识库，可能需要一点时间。`)) return;
       try{
         const ori = btn.textContent; btn.textContent='删除中...'; btn.disabled=true;
-        const r = await fetch('/api/files',{ method:'DELETE', headers:{'Content-Type':'application/json', ...authHeaders()}, body: JSON.stringify({filename, file_type:fileType}) });
+        const r = await fetch(window.API_PREFIX + '/api/files',{ 
+          method:'DELETE', 
+          headers:{'Content-Type':'application/json', ...authHeaders()}, 
+          body: JSON.stringify({filename, file_type:fileType}),
+          credentials: 'include'
+        });
         const j = await r.json();
         if(j && j.success){ await loadFiles(); }
         else { alert('删除失败：'+(j && j.error||'未知错误')); btn.textContent=ori; btn.disabled=false; }
@@ -219,7 +255,12 @@
       const form = new FormData(); form.append('file', fileInput.files[0]);
       uploadStatus.textContent='上传中...';
       try{
-        const r = await fetch('/api/upload_kb', { method:'POST', headers: { ...authHeaders() }, body: form });
+        const r = await fetch(window.API_PREFIX + '/api/upload_kb', { 
+          method:'POST', 
+          headers: { ...authHeaders() }, 
+          body: form,
+          credentials: 'include'
+        });
         const j = await r.json();
         if(j && j.success){ uploadStatus.textContent='✅ 上传成功'; fileInput.value=''; await loadFiles(); }
         else { uploadStatus.textContent='❌ 上传失败：'+(j && j.error || '未知错误'); }

@@ -16,6 +16,7 @@ from app.rag_components.retriever import MultimodalRetriever
 from app.rag_components.text_splitter import split_documents
 from app.rag_components.tts import TextToSpeech
 from app.rag_components.vector_store import VectorStoreManager
+from langchain_core.messages import HumanMessage, SystemMessage
 
 
 class RAGModule:
@@ -139,8 +140,40 @@ class RAGModule:
             self.logger.error("添加图片失败: %s", e)
             raise
 
+    def is_question(self, text: str) -> bool:
+        """
+        判断文本是否是问题或需要回答的请求。
+        """
+        if not text:
+            return False
+            
+        try:
+            messages = [
+                SystemMessage(content="你是一个意图识别助手。请判断用户的输入是否是煤矿用电安全相关的问题或请求。如果是，请只回复'YES'。如果不是（例如只是陈述句、感叹句、无意义的词语、自言自语等），请只回复'NO'。"),
+                HumanMessage(content=f"文本：{text}")
+            ]
+            # 使用 generator 中的 llm 实例
+            response = self.generator.llm.invoke(messages)
+            content = response.content.strip().upper()
+            self.logger.info(f"意图识别: '{text}' -> {content}")
+            
+            return "YES" in content
+        except Exception as e:
+            self.logger.error(f"意图识别失败: {e}")
+            return True 
+
+
     def query(self, question: str = "", image_path: str = None) -> Tuple[str, Dict, List[Dict]]:
-        """执行 RAG 查询"""
+        """
+        RAG 查询，支持文字和图片（图片功能待扩展）
+        
+        Args:
+            question: 文字内容（可为空字符串）
+            image_path: 图片文件路径（可选，None 表示无图片）
+        
+        Returns:
+            (answer, timings, sources)
+        """
         timings = {}
         
         if not question.strip() and not image_path:

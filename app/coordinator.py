@@ -31,7 +31,27 @@ APP_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(APP_DIR)
 TEMPLATE_DIR = os.path.join(ROOT_DIR, "templates")
 STATIC_DIR = os.path.join(ROOT_DIR, "static")
+
+# 配置 URL 前缀
+URL_PREFIX = "/wsq"
+
+# 自动剥离前缀
+class PrefixMiddleware(object):
+    def __init__(self, app, prefix=''):
+        self.app = app
+        self.prefix = prefix
+
+    def __call__(self, environ, start_response):
+        if environ['PATH_INFO'].startswith(self.prefix):
+            environ['PATH_INFO'] = environ['PATH_INFO'][len(self.prefix):]
+            environ['SCRIPT_NAME'] = self.prefix
+            return self.app(environ, start_response)
+        else:
+            start_response('404', [('Content-Type', 'text/plain')])
+            return ["This url does not belong to the app.".encode()]
+
 app = Flask(__name__, template_folder=TEMPLATE_DIR, static_folder=STATIC_DIR)
+app.wsgi_app = PrefixMiddleware(app.wsgi_app, prefix=URL_PREFIX)
 
 # ========== 管理端鉴权 ==========
 from functools import wraps
@@ -84,8 +104,33 @@ CONFIG_FILE = os.path.join(ROOT_DIR, "app_config.json")
 HOTWORDS_FILE = os.path.join(ROOT_DIR, "hotwords.txt")
 KB_PATH = os.path.join(ROOT_DIR, "knowledge.txt")
 
-# 确保临时音频目录存在
-os.makedirs(TEMP_AUDIO_DIR, exist_ok=True)
+def cleanup_temp_audio(max_age_seconds=3600):
+    """清理过期的临时音频文件"""
+    try:
+        if not os.path.exists(TEMP_AUDIO_DIR):
+            return
+        
+        now = time.time()
+        count = 0
+        for filename in os.listdir(TEMP_AUDIO_DIR):
+            file_path = os.path.join(TEMP_AUDIO_DIR, filename)
+            # 只清理 wav 文件
+            if not filename.endswith(".wav"):
+                continue
+                
+            try:
+                if os.path.isfile(file_path):
+                    mtime = os.path.getmtime(file_path)
+                    if now - mtime > max_age_seconds:
+                        os.remove(file_path)
+                        count += 1
+            except Exception as e:
+                logger.warning(f"清理文件 {filename} 失败: {e}")
+        
+        if count > 0:
+            logger.info(f"已清理 {count} 个过期音频文件")
+    except Exception as e:
+        logger.error(f"清理临时音频目录失败: {e}")
 
 # 确保临时音频目录存在
 os.makedirs(TEMP_AUDIO_DIR, exist_ok=True)
@@ -138,11 +183,19 @@ def api_login():
 
 # --- 热词管理 ---
 @app.route("/api/hotwords", methods=["GET", "POST"])
-@require_auth
 def manage_hotwords():
     if request.method == "GET":
         content = asr_module.read_hotwords()
         return jsonify({"hotwords": content})
+    
+    # POST 请求需要鉴权
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return jsonify({"success": False, "error": "Unauthorized"}), 401
+    token = auth.split(" ", 1)[1].strip()
+    if token not in _VALID_TOKENS:
+        return jsonify({"success": False, "error": "Unauthorized"}), 401
+
     data = request.get_json()
     hotwords = data.get("hotwords", "")
     try:
@@ -160,7 +213,10 @@ def recognize():
             return jsonify({"error": "没有上传音频文件"}), 400
         audio_file = request.files["audio"]
         audio_data = audio_file.read()
-        hotwords = request.form.get("hotwords", "")
+        hotwords = request.form.get("hotwords")
+        if not hotwords:
+            hotwords = asr_module.get_formatted_hotwords()
+        
         t0 = time.time()
         recognized_text, confidence = asr_module.recognize_audio(audio_data, hotwords=hotwords)
         asr_time = time.time() - t0
@@ -308,6 +364,9 @@ def query():
             result["image_path"] = os.path.relpath(image_path, ROOT_DIR) if image_path else None
         
         if audio_bytes:
+            # 清理过期音频
+            cleanup_temp_audio()
+            
             # 保存音频文件并返回URL，避免data URI长度限制
             audio_id = str(uuid.uuid4())
             audio_path = os.path.join(TEMP_AUDIO_DIR, f"{audio_id}.wav")
@@ -315,7 +374,8 @@ def query():
                 f.write(audio_bytes)
             audio_size_mb = len(audio_bytes) / (1024 * 1024)
             logger.info("音频文件已保存: %s, 大小: %.2f MB", audio_id, audio_size_mb)
-            audio_url = f"/api/audio/{audio_id}"
+            # 使用 URL_PREFIX 拼接音频 URL
+            audio_url = f"{URL_PREFIX}/api/audio/{audio_id}"
             return jsonify(
                 {
                     "success": True,
@@ -356,6 +416,20 @@ def text_chat():
         if not text:
             return jsonify({"error": "输入文本不能为空"}), 400
 
+        # 意图识别：判断是否为问题
+        if not rag_module.is_question(text):
+            logger.info(f"文本 '{text}' 被判定为非问题，停止处理")
+            return jsonify({
+                "success": True,
+                "recognized_text": text,
+                "answer": "", 
+                "audio": None,
+                "audio_id": audio_id,
+                "timings": {"total_time": time.time() - start_time},
+                "sources": [],
+                "ignored": True
+            })
+
         t0 = time.time()
         answer, rag_timings, sources = rag_module.query(question=text)
         timings["rag_time"] = time.time() - t0
@@ -367,11 +441,15 @@ def text_chat():
         timings["total_time"] = time.time() - start_time
 
         if audio_bytes:
+            # 清理过期音频
+            cleanup_temp_audio()
+
             audio_id = str(uuid.uuid4())
             audio_path = os.path.join(TEMP_AUDIO_DIR, f"{audio_id}.wav")
             with open(audio_path, "wb") as f:
                 f.write(audio_bytes)
-            audio_url = f"/api/audio/{audio_id}"
+            # 使用 URL_PREFIX 拼接音频 URL
+            audio_url = f"{URL_PREFIX}/api/audio/{audio_id}"
             return jsonify(
                 {
                     "success": True,
@@ -590,6 +668,20 @@ def recognize_and_query():
         timings["asr_time"] = time.time() - t0
         if not recognized_text:
             return jsonify({"success": False, "error": "未能识别出文本，请重试"}), 400
+
+        # 意图识别
+        if not rag_module.is_question(recognized_text):
+            logger.info(f"文本 '{recognized_text}' 被判定为非问题，停止处理")
+            return jsonify({
+                "success": True,
+                "recognized_text": recognized_text,
+                "answer": "",
+                "audio": None,
+                "timings": {"asr_time": timings["asr_time"], "total_time": time.time() - start_time},
+                "sources": [],
+                "ignored": True
+            })
+
         t0 = time.time()
         answer, rag_timings, sources = rag_module.query(recognized_text)
         timings["rag_time"] = time.time() - t0
@@ -599,6 +691,9 @@ def recognize_and_query():
         timings["tts_time"] = time.time() - t0
         timings["total_time"] = time.time() - start_time
         if audio_bytes:
+            # 清理过期音频
+            cleanup_temp_audio()
+            
             # 保存音频文件并返回URL，避免data URI长度限制
             audio_id = str(uuid.uuid4())
             audio_path = os.path.join(TEMP_AUDIO_DIR, f"{audio_id}.wav")
@@ -606,7 +701,8 @@ def recognize_and_query():
                 f.write(audio_bytes)
             audio_size_mb = len(audio_bytes) / (1024 * 1024)
             logger.info("音频文件已保存: %s, 大小: %.2f MB", audio_id, audio_size_mb)
-            audio_url = f"/api/audio/{audio_id}"
+            # 使用 URL_PREFIX 拼接音频 URL
+            audio_url = f"{URL_PREFIX}/api/audio/{audio_id}"
             return jsonify(
                 {
                     "success": True,
@@ -683,7 +779,7 @@ def main():
     print("请在浏览器中打开: http://localhost:7000")
     print("按 Ctrl+C 退出程序")
     print("=" * 60 + "\n")
-    app.run(host="::", port=7000, debug=debug_mode)
+    app.run(host="::", port=5000, debug=debug_mode)
 
 
 if __name__ == "__main__":

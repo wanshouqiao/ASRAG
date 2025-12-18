@@ -314,7 +314,7 @@
     </style>
 </head>
 <body>
-    <a href="/admin" class="admin-link">进入管理端 ▶</a>
+    <a href="javascript:void(0)" onclick="window.location.href = window.API_PREFIX + '/admin'" class="admin-link">进入管理端 ▶</a>
     <div class="container">
         <h1>🎤 煤矿用电安全智能问答系统</h1>
         <p class="subtitle">说出您的问题，AI 将基于知识库为您解答</p>
@@ -433,6 +433,30 @@
     </div>
 
     <script>
+        // 动态获取 API 前缀，适配 /wsq 等反向代理路径
+        // request.script_root 会由 Flask 渲染为实际的 SCRIPT_NAME (例如 "/wsq" 或 "")
+        window.API_PREFIX = "{{ request.script_root }}";
+
+        // --- 移动端自动播放适配 ---
+        window.globalTtsAudio = new Audio();
+        window.audioUnlocked = false;
+        function unlockAudio() {
+            // 如果当前正在播放（无论是静音片段还是实际语音），说明已解锁且无需打断
+            if (!window.globalTtsAudio.paused) return;
+            
+            // 尝试播放静音片段来解锁
+            const silentAudio = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEAwF0AAIC7AAACAgAgZGF0YQAAAAA=';
+            window.globalTtsAudio.src = silentAudio;
+            window.globalTtsAudio.play().then(() => {
+                // 播放成功后立即暂停（虽然0长度音频会自动结束，但显式暂停更安全）
+                window.globalTtsAudio.pause();
+                window.globalTtsAudio.currentTime = 0;
+                window.audioUnlocked = true;
+            }).catch(e => {
+                console.log('Audio unlock failed', e);
+            });
+        }
+        // -------------------------
 
         let lastAsrTime = 0; // 存储最后一次 ASR 耗时
         let lastAudioId = null; // 存储最后一次识别的 audio_id
@@ -490,7 +514,9 @@
         // 加载当前模型设置
         async function loadModelSettings() {
             try {
-                const response = await fetch('/api/model');
+                const response = await fetch(window.API_PREFIX + '/api/model', {
+                    credentials: 'include'
+                });
                 const data = await response.json();
                 if (data.success) {
                     modelSelect.value = data.current_model;
@@ -507,12 +533,13 @@
             modelSelect.disabled = true;
             
             try {
-                const response = await fetch('/api/model', {
+                const response = await fetch(window.API_PREFIX + '/api/model', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ model_type: modelType })
+                    body: JSON.stringify({ model_type: modelType }),
+                    credentials: 'include'
                 });
                 
                 const data = await response.json();
@@ -541,7 +568,9 @@
         // 加载文件列表
         async function loadFiles() {
             try {
-                const response = await fetch('/api/files');
+                const response = await fetch(window.API_PREFIX + '/api/files', {
+                    credentials: 'include'
+                });
                 const data = await response.json();
                 
                 if (data.success) {
@@ -610,7 +639,7 @@
                 btn.style.borderRadius = '5px';
                 btn.style.cursor = 'pointer';
 
-                const response = await fetch('/api/files', {
+                const response = await fetch(window.API_PREFIX + '/api/files', {
                     method: 'DELETE',
                     headers: {
                         'Content-Type': 'application/json'
@@ -618,7 +647,8 @@
                     body: JSON.stringify({ 
                         filename: filename,
                         file_type: fileType
-                    })
+                    }),
+                    credentials: 'include'
                 });
                 
                 const data = await response.json();
@@ -642,7 +672,9 @@
         // 加载热词配置
         async function loadHotwords() {
             try {
-                const response = await fetch('/api/hotwords');
+                const response = await fetch(window.API_PREFIX + '/api/hotwords', {
+                    credentials: 'include'
+                });
                 const data = await response.json();
                 if (data.hotwords) {
                     document.getElementById('hotwordsInput').value = data.hotwords;
@@ -656,12 +688,13 @@
         async function saveHotwords() {
             const hotwords = document.getElementById('hotwordsInput').value;
             try {
-                await fetch('/api/hotwords', {
+                await fetch(window.API_PREFIX + '/api/hotwords', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ hotwords: hotwords })
+                    body: JSON.stringify({ hotwords: hotwords }),
+                    credentials: 'include'
                 });
             } catch (error) {
                 console.error('保存热词失败:', error);
@@ -722,6 +755,7 @@
 
         // 发送文本
         async function sendText() {
+            unlockAudio(); // 尝试解锁音频
             const text = textInput.value.trim();
             const imageFile = imageInput.files && imageInput.files[0];
             
@@ -755,12 +789,13 @@
                         formData.append('audio_id', lastAudioId);
                     }
                     formData.append('image', imageFile);
-                    response = await fetch('/api/query', {
+                    response = await fetch(window.API_PREFIX + '/api/query', {
                         method: 'POST',
-                        body: formData
+                        body: formData,
+                        credentials: 'include'
                     });
                 } else {
-                    response = await fetch('/api/query', {
+                    response = await fetch(window.API_PREFIX + '/api/query', {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json'
@@ -768,7 +803,8 @@
                         body: JSON.stringify({ 
                             text: text,
                             audio_id: lastAudioId  // 传递 audio_id
-                        })
+                        }),
+                        credentials: 'include'
                     });
                 }
 
@@ -922,7 +958,7 @@
         // 保存识别数据到后端
         async function saveRecognitionData(recognizedText, correctedText = null) {
             try {
-                const response = await fetch('/api/save_recognition', {
+                const response = await fetch(window.API_PREFIX + '/api/save_recognition', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
@@ -930,7 +966,8 @@
                         recognized_text: recognizedText,
                         corrected_text: correctedText,
                         confidence: lastConfidence
-                    })
+                    }),
+                    credentials: 'include'
                 });
                 
                 const data = await response.json();
@@ -980,9 +1017,10 @@
             uploadStatus.textContent = '正在上传并向量化...';
 
             try {
-                const resp = await fetch('/api/upload_kb', {
+                const resp = await fetch(window.API_PREFIX + '/api/upload_kb', {
                     method: 'POST',
-                    body: formData
+                    body: formData,
+                    credentials: 'include'
                 });
                 const data = await resp.json();
                 if (data.success) {
@@ -1008,21 +1046,14 @@
                 let part = line.trim();
                 if (!part) continue;
                 
-                // 尝试分离权重（如果有），但目前只使用词本身，因为 JSON 格式可能不被支持
-                // 假设格式是 "词语 权重" 或 "词语"
-                const parts = part.split(/\s+/);
-                if (parts.length > 1) {
-                    const lastPart = parts[parts.length - 1];
-                    if (!isNaN(parseInt(lastPart))) {
-                        // 最后一个是数字，认为是权重，去掉它
-                        part = parts.slice(0, parts.length - 1).join(' ');
-                    }
-                }
-                if (part) words.push(part);
+                // 直接保留整行内容（包括权重），因为 SeacoParaformer 支持 "词语 权重" 格式
+                // 并且需要用空格将所有热词连接起来
+                words.push(part);
             }
             
-            // 返回空格分隔的字符串，而不是 JSON
-            return words.join(' ');
+            const result = words.join(' ');
+            console.log('DEBUG: getHotwords result:', result);
+            return result;
         }
 
         // 处理音频
@@ -1037,17 +1068,13 @@
                 // 发送到服务器
                 const formData = new FormData();
                 formData.append('audio', wavBlob, 'recording.wav');
-                
-                // 添加热词
-                const hotwords = getHotwords();
-                if (hotwords) {
-                    formData.append('hotwords', hotwords);
-                }
+               
                 
                 // 改为只调用识别接口
-                const response = await fetch('/api/recognize', {
+                const response = await fetch(window.API_PREFIX + '/api/recognize', {
                     method: 'POST',
-                    body: formData
+                    body: formData,
+                    credentials: 'include'
                 });
                 
                 const data = await response.json();
@@ -1287,28 +1314,62 @@
             
             // 自动播放音频（如果存在）
             if (audioData) {
-                const audio = resultDiv.querySelector('audio');
-                if (audio) {
-                    // 记录当前TTS音频，确保新回答到来时能关闭上一个
-                    window._currentTtsAudio = audio;
-                    // 绑定 AI 说话动效及回声消除标志
-                    audio.addEventListener('play', () => {
+                const manualAudio = resultDiv.querySelector('audio');
+                
+                // 1. 配置手动播放器（用于历史记录回放）
+                if (manualAudio) {
+                    manualAudio.addEventListener('play', () => {
+                        // 如果全局播放器正在播放，先停止它
+                        if (window.globalTtsAudio && !window.globalTtsAudio.paused) {
+                            window.globalTtsAudio.pause();
+                        }
                         startAssistantEq();
-                        window._isAiSpeaking = true; // 标记 AI 正在说话
+                        window._isAiSpeaking = true;
+                        window._currentTtsAudio = manualAudio;
                     });
-                    audio.addEventListener('ended', () => { 
-                        stopAssistantEq(); 
-                        window._isAiSpeaking = false; // 标记 AI 说话结束
-                        if (window._currentTtsAudio===audio) window._currentTtsAudio=null; 
+                    manualAudio.addEventListener('pause', () => {
+                        stopAssistantEq();
+                        window._isAiSpeaking = false;
                     });
-                    audio.addEventListener('pause', () => { 
-                        stopAssistantEq(); 
-                        window._isAiSpeaking = false; // 标记 AI 说话暂停
-                        if (window._currentTtsAudio===audio) window._currentTtsAudio=null; 
+                    manualAudio.addEventListener('ended', () => {
+                        stopAssistantEq();
+                        window._isAiSpeaking = false;
                     });
-                    audio.play().catch(e => {
-                        console.log('自动播放被阻止，用户需要手动点击播放');
+                }
+
+                // 2. 尝试自动播放（优先使用全局 blessed audio 对象）
+                if (window.globalTtsAudio) {
+                    // 停止之前的播放
+                    window.globalTtsAudio.pause();
+                    window.globalTtsAudio.currentTime = 0;
+                    
+                    window.globalTtsAudio.src = audioData;
+                    window._currentTtsAudio = window.globalTtsAudio;
+
+                    // 绑定动效
+                    window.globalTtsAudio.onplay = () => {
+                        startAssistantEq();
+                        window._isAiSpeaking = true;
+                    };
+                    window.globalTtsAudio.onended = () => {
+                        stopAssistantEq();
+                        window._isAiSpeaking = false;
+                        if (window._currentTtsAudio === window.globalTtsAudio) window._currentTtsAudio = null;
+                    };
+                    window.globalTtsAudio.onpause = () => {
+                        stopAssistantEq();
+                        window._isAiSpeaking = false;
+                        if (window._currentTtsAudio === window.globalTtsAudio) window._currentTtsAudio = null;
+                    };
+
+                    window.globalTtsAudio.play().catch(e => {
+                        console.log('Global audio 自动播放被阻止', e);
+                        // 如果全局播放失败，尝试播放 DOM 元素
+                        if(manualAudio) manualAudio.play().catch(e2 => console.log('DOM audio 自动播放也被阻止'));
                     });
+                } else if (manualAudio) {
+                    // 降级：直接播放 DOM 元素
+                    manualAudio.play().catch(e => console.log('自动播放被阻止'));
                 }
             }
         }
@@ -1358,14 +1419,28 @@ async function sendRecognizedToLLM(text) {
     const payload = { text: text, audio_id: null };
     try {
         updateUI('processing');
-        const resp = await fetch('/api/text_chat', {
+        const resp = await fetch(window.API_PREFIX + '/api/text_chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
+            body: JSON.stringify(payload),
+            credentials: 'include'
         });
         const data = await resp.json();
         if (data && data.success) {
-            displayResult(text, data.answer, data.audio, data.timings, data.sources, data.audio_id);
+            if (data.ignored) {
+                console.log('已忽略非问题文本:', text);
+                const statusDiv = document.getElementById('status');
+                // 临时显示提示
+                statusDiv.textContent = '非问题文本，已忽略';
+                setTimeout(() => {
+                    // 恢复状态显示（依赖 updateUI 逻辑，这里简单处理）
+                    if (statusDiv.textContent === '非问题文本，已忽略') {
+                         statusDiv.textContent = micEnabled ? `唤醒词：${WAKE_WORD}` : '准备就绪';
+                    }
+                }, 2000);
+            } else {
+                displayResult(text, data.answer, data.audio, data.timings, data.sources, data.audio_id);
+            }
         } else {
             showError(data && data.error ? data.error : '处理失败，请重试');
         }
@@ -1378,7 +1453,7 @@ async function sendRecognizedToLLM(text) {
 
         const btnWakeEnableMic = document.getElementById('btnWakeEnableMic');
         const wakeStatus = document.getElementById('wakeStatus');
-        const SILENCE_TIMEOUT_MS = 15000; // 连续静音超时自动回到唤醒
+        const SILENCE_TIMEOUT_MS = 8000; // 连续静音超时自动回到唤醒
         const SILENCE_ABS_THRESH = 400;   // Int16 平均绝对幅度阈值（经验值）
         const SILENCE_GUARD_MS = 1500;    // 唤醒后的静音保护时长（避免一唤醒就被误判静音）
 
@@ -1459,7 +1534,7 @@ async function sendRecognizedToLLM(text) {
                             setWakeStatus('已唤醒，正在回应...');
 
                             // 播放提示音
-                            const audio = new Audio('/static/here.mp3');
+                            const audio = new Audio(window.API_PREFIX + '/static/hello.wav');
                             
                             const startRecording = () => {
                                 window.isPlayingWakeSound = false;
@@ -1755,6 +1830,7 @@ async function softResetToWakeListening(reasonText){
 
 // 跳过唤醒词
         btnWakeBypass.addEventListener('click', () => {
+            unlockAudio(); // 尝试解锁音频
             wakeBypassed = true;
             sendCtrl({ wake_word_bypass: true });
             
@@ -1763,6 +1839,7 @@ async function softResetToWakeListening(reasonText){
 
         // 启用/关闭麦克风监听（按钮切换）
         btnWakeEnableMic.addEventListener('click', async () => {
+            unlockAudio(); // 尝试解锁音频
             if (!micEnabled) {
                 // 重新建立 WS 会话，重置服务端状态
                 wsAutoReconnect = true;
