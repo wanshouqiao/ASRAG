@@ -437,6 +437,27 @@
         // request.script_root 会由 Flask 渲染为实际的 SCRIPT_NAME (例如 "/wsq" 或 "")
         window.API_PREFIX = "{{ request.script_root }}";
 
+        // --- 移动端自动播放适配 ---
+        window.globalTtsAudio = new Audio();
+        window.audioUnlocked = false;
+        function unlockAudio() {
+            // 如果当前正在播放（无论是静音片段还是实际语音），说明已解锁且无需打断
+            if (!window.globalTtsAudio.paused) return;
+            
+            // 尝试播放静音片段来解锁
+            const silentAudio = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEAwF0AAIC7AAACAgAgZGF0YQAAAAA=';
+            window.globalTtsAudio.src = silentAudio;
+            window.globalTtsAudio.play().then(() => {
+                // 播放成功后立即暂停（虽然0长度音频会自动结束，但显式暂停更安全）
+                window.globalTtsAudio.pause();
+                window.globalTtsAudio.currentTime = 0;
+                window.audioUnlocked = true;
+            }).catch(e => {
+                console.log('Audio unlock failed', e);
+            });
+        }
+        // -------------------------
+
         let lastAsrTime = 0; // 存储最后一次 ASR 耗时
         let lastAudioId = null; // 存储最后一次识别的 audio_id
         let lastRecognizedText = ''; // 存储最后一次识别的文本
@@ -734,6 +755,7 @@
 
         // 发送文本
         async function sendText() {
+            unlockAudio(); // 尝试解锁音频
             const text = textInput.value.trim();
             const imageFile = imageInput.files && imageInput.files[0];
             
@@ -1024,7 +1046,7 @@
                 let part = line.trim();
                 if (!part) continue;
                 
-                // 尝试分离权重（如果有），但目前只使用词本身，因为 JSON 格式可能不被支持
+                // 尝试分离权重（如果有），但目前只使用词本身，因为 SeacoParaformer 模型需要空格分隔的字符串
                 // 假设格式是 "词语 权重" 或 "词语"
                 const parts = part.split(/\s+/);
                 if (parts.length > 1) {
@@ -1037,7 +1059,7 @@
                 if (part) words.push(part);
             }
             
-            // 返回空格分隔的字符串，而不是 JSON
+            // 返回空格分隔的字符串
             return words.join(' ');
         }
 
@@ -1304,28 +1326,62 @@
             
             // 自动播放音频（如果存在）
             if (audioData) {
-                const audio = resultDiv.querySelector('audio');
-                if (audio) {
-                    // 记录当前TTS音频，确保新回答到来时能关闭上一个
-                    window._currentTtsAudio = audio;
-                    // 绑定 AI 说话动效及回声消除标志
-                    audio.addEventListener('play', () => {
+                const manualAudio = resultDiv.querySelector('audio');
+                
+                // 1. 配置手动播放器（用于历史记录回放）
+                if (manualAudio) {
+                    manualAudio.addEventListener('play', () => {
+                        // 如果全局播放器正在播放，先停止它
+                        if (window.globalTtsAudio && !window.globalTtsAudio.paused) {
+                            window.globalTtsAudio.pause();
+                        }
                         startAssistantEq();
-                        window._isAiSpeaking = true; // 标记 AI 正在说话
+                        window._isAiSpeaking = true;
+                        window._currentTtsAudio = manualAudio;
                     });
-                    audio.addEventListener('ended', () => { 
-                        stopAssistantEq(); 
-                        window._isAiSpeaking = false; // 标记 AI 说话结束
-                        if (window._currentTtsAudio===audio) window._currentTtsAudio=null; 
+                    manualAudio.addEventListener('pause', () => {
+                        stopAssistantEq();
+                        window._isAiSpeaking = false;
                     });
-                    audio.addEventListener('pause', () => { 
-                        stopAssistantEq(); 
-                        window._isAiSpeaking = false; // 标记 AI 说话暂停
-                        if (window._currentTtsAudio===audio) window._currentTtsAudio=null; 
+                    manualAudio.addEventListener('ended', () => {
+                        stopAssistantEq();
+                        window._isAiSpeaking = false;
                     });
-                    audio.play().catch(e => {
-                        console.log('自动播放被阻止，用户需要手动点击播放');
+                }
+
+                // 2. 尝试自动播放（优先使用全局 blessed audio 对象）
+                if (window.globalTtsAudio) {
+                    // 停止之前的播放
+                    window.globalTtsAudio.pause();
+                    window.globalTtsAudio.currentTime = 0;
+                    
+                    window.globalTtsAudio.src = audioData;
+                    window._currentTtsAudio = window.globalTtsAudio;
+
+                    // 绑定动效
+                    window.globalTtsAudio.onplay = () => {
+                        startAssistantEq();
+                        window._isAiSpeaking = true;
+                    };
+                    window.globalTtsAudio.onended = () => {
+                        stopAssistantEq();
+                        window._isAiSpeaking = false;
+                        if (window._currentTtsAudio === window.globalTtsAudio) window._currentTtsAudio = null;
+                    };
+                    window.globalTtsAudio.onpause = () => {
+                        stopAssistantEq();
+                        window._isAiSpeaking = false;
+                        if (window._currentTtsAudio === window.globalTtsAudio) window._currentTtsAudio = null;
+                    };
+
+                    window.globalTtsAudio.play().catch(e => {
+                        console.log('Global audio 自动播放被阻止', e);
+                        // 如果全局播放失败，尝试播放 DOM 元素
+                        if(manualAudio) manualAudio.play().catch(e2 => console.log('DOM audio 自动播放也被阻止'));
                     });
+                } else if (manualAudio) {
+                    // 降级：直接播放 DOM 元素
+                    manualAudio.play().catch(e => console.log('自动播放被阻止'));
                 }
             }
         }
@@ -1786,14 +1842,14 @@ async function softResetToWakeListening(reasonText){
 
 // 跳过唤醒词
         btnWakeBypass.addEventListener('click', () => {
-            wakeBypassed = true;
-            sendCtrl({ wake_word_bypass: true });
+            unlockAudio(); // 尝试解锁音频
             
             setWakeStatus('已跳过唤醒词，直接识别中...');
         });
 
         // 启用/关闭麦克风监听（按钮切换）
         btnWakeEnableMic.addEventListener('click', async () => {
+            unlockAudio(); // 尝试解锁音频
             if (!micEnabled) {
                 // 重新建立 WS 会话，重置服务端状态
                 wsAutoReconnect = true;

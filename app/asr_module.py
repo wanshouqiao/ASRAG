@@ -139,7 +139,7 @@ class ASRModule:
                     "is_speaking": True,
                 }
                 if hotwords:
-                    config["hotword"] = hotwords.strip() if isinstance(hotwords, str) else str(hotwords)
+                    config["hotwords"] = hotwords.strip() if isinstance(hotwords, str) else str(hotwords)
                 ws.send(json.dumps(config))
                 chunk_size = 1920
                 for i in range(0, len(pcm_data), chunk_size):
