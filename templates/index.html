@@ -1409,7 +1409,7 @@ async function sendRecognizedToLLM(text) {
 
         const btnWakeEnableMic = document.getElementById('btnWakeEnableMic');
         const wakeStatus = document.getElementById('wakeStatus');
-        const SILENCE_TIMEOUT_MS = 15000; // 连续静音超时自动回到唤醒
+        const SILENCE_TIMEOUT_MS = 8000; // 连续静音超时自动回到唤醒
         const SILENCE_ABS_THRESH = 400;   // Int16 平均绝对幅度阈值（经验值）
         const SILENCE_GUARD_MS = 1500;    // 唤醒后的静音保护时长（避免一唤醒就被误判静音）
 
