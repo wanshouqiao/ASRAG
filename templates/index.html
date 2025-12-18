@@ -1477,7 +1477,7 @@ async function sendRecognizedToLLM(text) {
                             setWakeStatus('已唤醒，正在回应...');
 
                             // 播放提示音
-                            const audio = new Audio(window.API_PREFIX + '/static/here.mp3');
+                            const audio = new Audio(window.API_PREFIX + '/static/hello.wav');
                             
                             const startRecording = () => {
                                 window.isPlayingWakeSound = false;
