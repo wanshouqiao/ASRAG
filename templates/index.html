@@ -1344,7 +1344,7 @@
         let silenceGuardUntil = 0; // 唤醒后的静音保护期（毫秒时间戳）
         window.isPlayingWakeSound = false; // 是否正在播放唤醒提示音
 
-        const WAKE_WORD = '乌萨奇'; // 唤醒词（硬编码）
+        const WAKE_WORD = '小毅小毅'; // 唤醒词（硬编码）
 
         const btnWakeBypass = document.getElementById('btnWakeBypass');
 // 初始隐藏“跳过唤醒词”按钮，启用监听后再显示
@@ -1783,7 +1783,7 @@ async function softResetToWakeListening(reasonText){
                 btnWakeEnableMic.textContent = '⏹️ 关闭监听';
                 btnWakeEnableMic.style.background = '#f44336';
                 setWakeStatus('麦克风已启用，正在监听唤醒词...');
-                updateUI('idle'); // 更新状态显示为"唤醒词：乌萨奇"
+                updateUI('idle'); // 更新状态显示为"唤醒词：小毅小毅"
                 if (btnWakeBypass) btnWakeBypass.style.display = 'inline-block';
             } else {
                 await stopMicAndStream('已关闭监听');
