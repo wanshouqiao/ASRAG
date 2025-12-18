@@ -34,19 +34,12 @@ class MultimodalRetriever:
             raise ValueError("问题和图片不能同时为空")
 
         retrieved_docs: List[Document] = []
-        effective_question = question
 
         try:
-            if has_image and has_text:
-                # 图文联合检索
+            if has_image:
+                # 图检索
                 query_vector = self.embeddings.embed_multimodal(image_path, question)
                 retrieved_docs = self.vector_store_manager.similarity_search_by_vector(query_vector)
-            elif has_image:
-                # 纯图片检索
-                query_vector = self.embeddings.embed_image(image_path)
-                retrieved_docs = self.vector_store_manager.similarity_search_by_vector(query_vector)
-                if not has_text:
-                    effective_question = "请比较用户图片与知识库检索到的文本/图片的相似与不同，并描述用户图片。"
             else:
                 # 纯文本检索
                 retriever = self.vector_store_manager.get_retriever()
@@ -58,12 +51,10 @@ class MultimodalRetriever:
             if has_image:
                 query_vector = self.embeddings.embed_image(image_path)
                 retrieved_docs = self.vector_store_manager.similarity_search_by_vector(query_vector)
-                if not has_text:
-                    effective_question = "描述这张图片的内容。"
             else:
                 retriever = self.vector_store_manager.get_retriever()
                 if retriever:
                     retrieved_docs = retriever.invoke(question)
         
-        return retrieved_docs, effective_question
+        return retrieved_docs
 

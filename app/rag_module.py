@@ -158,21 +158,28 @@ class RAGModule:
             t0 = time.time()
             if is_vision_request:
                 # 图文分析需要图文检索
-                retrieved_docs, effective_question = self.retriever.retrieve(question, image_path)
+                retrieved_docs = self.retriever.retrieve(question, image_path)
             else:
                 # 文本问答只进行文本检索，忽略图片
-                retrieved_docs, effective_question = self.retriever.retrieve(question, image_path=None)
+                retrieved_docs = self.retriever.retrieve(question, image_path=None)
             timings["retrieval"] = time.time() - t0
 
             # 3. 生成
             t0 = time.time()
-            answer = self.generator.generate_answer(
-                effective_question, 
+            raw_answer = self.generator.generate_answer(
+                question, 
                 retrieved_docs, 
                 query_image_path=image_path if is_vision_request else None, # 只有图文分析才传递图片路径
                 is_vision_request=is_vision_request
             )
             timings["llm_generation"] = time.time() - t0
+
+            # 3.5. 后处理：提取“回答”部分
+            answer = raw_answer
+            if is_vision_request and "【回答】" in raw_answer:
+                answer = raw_answer.split("【回答】", 1)[-1].strip()
+            elif is_vision_request and "【第二阶段：回答】" in raw_answer:
+                answer = raw_answer.split("【第二阶段：回答】", 1)[-1].strip()
 
             # 4. 格式化来源
             sources = [
