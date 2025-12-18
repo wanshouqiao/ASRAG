@@ -104,8 +104,33 @@ CONFIG_FILE = os.path.join(ROOT_DIR, "app_config.json")
 HOTWORDS_FILE = os.path.join(ROOT_DIR, "hotwords.txt")
 KB_PATH = os.path.join(ROOT_DIR, "knowledge.txt")
 
-# 确保临时音频目录存在
-os.makedirs(TEMP_AUDIO_DIR, exist_ok=True)
+def cleanup_temp_audio(max_age_seconds=3600):
+    """清理过期的临时音频文件"""
+    try:
+        if not os.path.exists(TEMP_AUDIO_DIR):
+            return
+        
+        now = time.time()
+        count = 0
+        for filename in os.listdir(TEMP_AUDIO_DIR):
+            file_path = os.path.join(TEMP_AUDIO_DIR, filename)
+            # 只清理 wav 文件
+            if not filename.endswith(".wav"):
+                continue
+                
+            try:
+                if os.path.isfile(file_path):
+                    mtime = os.path.getmtime(file_path)
+                    if now - mtime > max_age_seconds:
+                        os.remove(file_path)
+                        count += 1
+            except Exception as e:
+                logger.warning(f"清理文件 {filename} 失败: {e}")
+        
+        if count > 0:
+            logger.info(f"已清理 {count} 个过期音频文件")
+    except Exception as e:
+        logger.error(f"清理临时音频目录失败: {e}")
 
 # 确保临时音频目录存在
 os.makedirs(TEMP_AUDIO_DIR, exist_ok=True)
@@ -339,6 +364,9 @@ def query():
             result["image_path"] = os.path.relpath(image_path, ROOT_DIR) if image_path else None
         
         if audio_bytes:
+            # 清理过期音频
+            cleanup_temp_audio()
+            
             # 保存音频文件并返回URL，避免data URI长度限制
             audio_id = str(uuid.uuid4())
             audio_path = os.path.join(TEMP_AUDIO_DIR, f"{audio_id}.wav")
@@ -413,6 +441,9 @@ def text_chat():
         timings["total_time"] = time.time() - start_time
 
         if audio_bytes:
+            # 清理过期音频
+            cleanup_temp_audio()
+
             audio_id = str(uuid.uuid4())
             audio_path = os.path.join(TEMP_AUDIO_DIR, f"{audio_id}.wav")
             with open(audio_path, "wb") as f:
@@ -660,6 +691,9 @@ def recognize_and_query():
         timings["tts_time"] = time.time() - t0
         timings["total_time"] = time.time() - start_time
         if audio_bytes:
+            # 清理过期音频
+            cleanup_temp_audio()
+            
             # 保存音频文件并返回URL，避免data URI长度限制
             audio_id = str(uuid.uuid4())
             audio_path = os.path.join(TEMP_AUDIO_DIR, f"{audio_id}.wav")
