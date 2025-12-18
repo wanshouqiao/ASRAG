@@ -150,17 +150,31 @@ class RAGModule:
             return "知识库为空，请先上传文档。", timings, []
 
         try:
-            # 1. 检索
+            # 1. 意图判断
+            intent = self.generator.classify_intent(question, has_image=bool(image_path))
+            is_vision_request = (intent == "vision_analysis")
+
+            # 2. 检索
             t0 = time.time()
-            retrieved_docs, effective_question = self.retriever.retrieve(question, image_path)
+            if is_vision_request:
+                # 图文分析需要图文检索
+                retrieved_docs, effective_question = self.retriever.retrieve(question, image_path)
+            else:
+                # 文本问答只进行文本检索，忽略图片
+                retrieved_docs, effective_question = self.retriever.retrieve(question, image_path=None)
             timings["retrieval"] = time.time() - t0
 
-            # 2. 生成
+            # 3. 生成
             t0 = time.time()
-            answer = self.generator.generate_answer(effective_question, retrieved_docs, image_path)
+            answer = self.generator.generate_answer(
+                effective_question, 
+                retrieved_docs, 
+                query_image_path=image_path if is_vision_request else None, # 只有图文分析才传递图片路径
+                is_vision_request=is_vision_request
+            )
             timings["llm_generation"] = time.time() - t0
 
-            # 3. 格式化来源
+            # 4. 格式化来源
             sources = [
                 {
                     "content": doc.page_content if not doc.page_content.startswith('image://') else f"图片: {os.path.basename(doc.metadata.get('source', ''))}",
