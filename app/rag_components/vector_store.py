@@ -79,7 +79,7 @@ class VectorStoreManager:
         self.save_vectorstore()
         logger.info("✓ 向量库重建完成")
 
-    def get_retriever(self, k: int = 3):
+    def get_retriever(self, k: int = 5):
         """获取 LangChain 检索器"""
         if self.vectorstore:
             return self.vectorstore.as_retriever(search_kwargs={"k": k})
