@@ -822,7 +822,7 @@
                         lastAsrTime = 0; // 重置
                     }
                     
-                    displayResult(data.recognized_text, data.answer, data.audio, timings, data.sources, data.audio_id);
+                    displayResult(data.recognized_text, data.answer, data.audio, timings, data.sources, data.audio_id, data.image_path);
                     textInput.value = ''; // 清空输入框
                     lastAudioId = null; // 重置 audio_id
                     recognitionResult.style.display = 'none'; // 隐藏识别结果区域
@@ -1206,8 +1206,12 @@
             status.className = `status ${state}`;
             switch(state) {
                 case 'idle':
-                    // 如果已启用监听，显示唤醒词；否则显示"准备就绪"
-                    status.textContent = micEnabled ? `唤醒词：${WAKE_WORD}` : '准备就绪';
+                    // 如果已启用监听
+                    if (micEnabled) {
+                        status.textContent = hasWoken ? '正在聆听...' : `唤醒词：${WAKE_WORD}`;
+                    } else {
+                        status.textContent = '准备就绪';
+                    }
                     waveform.classList.add('hidden');
                     // 如果之前是处理状态，且麦克风已启用，且未唤醒，恢复唤醒词监听
                     if (previousState === 'processing' && micEnabled && ws && ws.readyState === 1 && !hasWoken) {
@@ -1217,7 +1221,7 @@
                     }
                     break;
                 case 'recording':
-                    status.textContent = '正在录音...';
+                    status.textContent = '正在聆听...';
                     waveform.classList.remove('hidden');
                     // 如果之前是处理状态，且已经唤醒，恢复语音输入（但不重新开启唤醒词，因为已经唤醒了）
                     if (previousState === 'processing' && micEnabled && ws && ws.readyState === 1 && hasWoken) {
@@ -1265,7 +1269,7 @@
         };
 
         // 显示结果
-        function displayResult(recognizedText, answer, audioData, timings, sources, audioId) {
+        function displayResult(recognizedText, answer, audioData, timings, sources, audioId, imagePath) {
             const resultDiv = document.createElement('div');
 
             // 如果有上一次AI语音正在播放，先停止它，避免多路播放
@@ -1274,6 +1278,11 @@
                 try { window._currentTtsAudio.currentTime = 0; } catch(_){}
                 stopAssistantEq && stopAssistantEq();
                 window._currentTtsAudio = null;
+            }
+            
+            let imageHTML = '';
+            if (imagePath) {
+                imageHTML = `<div style="margin-top: 10px;"><img src="${window.API_PREFIX}/${imagePath}" style="max-width: 100%; max-height: 300px; border-radius: 8px; border: 1px solid #eee;"></div>`;
             }
             
             let audioHTML = '';
@@ -1331,6 +1340,7 @@
                 <div class="result-section">
                     <h3>用户问题</h3>
                     <div class="result-text">${recognizedText}</div>
+                    ${imageHTML}
                 </div>
                 <div class="result-section answer">
                     <h3>AI 回答${stopBtn}</h3>
@@ -1487,7 +1497,7 @@ async function sendRecognizedToLLM(text) {
                     }
                 }, 2000);
             } else {
-                displayResult(text, data.answer, data.audio, data.timings, data.sources, data.audio_id);
+                displayResult(text, data.answer, data.audio, data.timings, data.sources, data.audio_id, null);
             }
         } else {
             showError(data && data.error ? data.error : '处理失败，请重试');

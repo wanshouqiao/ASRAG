@@ -13,7 +13,7 @@ import time
 import uuid
 from pathlib import Path
 
-from flask import Flask, jsonify, render_template, request, abort, send_file
+from flask import Flask, jsonify, render_template, request, abort, send_file, send_from_directory
 from werkzeug.exceptions import HTTPException
 
 from app.asr_module import ASRModule
@@ -353,9 +353,10 @@ def query():
             "success": True,
             "recognized_text": text if text else "",
             "answer": answer,
-            "audio_id": audio_id,
+            "audio_id": audio_id, # 初始为输入 audio_id
             "timings": timings,
             "sources": sources,
+            "audio": None
         }
         
         # 如果有图片，添加图片信息
@@ -368,36 +369,19 @@ def query():
             cleanup_temp_audio()
             
             # 保存音频文件并返回URL，避免data URI长度限制
-            audio_id = str(uuid.uuid4())
-            audio_path = os.path.join(TEMP_AUDIO_DIR, f"{audio_id}.wav")
+            new_audio_id = str(uuid.uuid4())
+            audio_path = os.path.join(TEMP_AUDIO_DIR, f"{new_audio_id}.wav")
             with open(audio_path, "wb") as f:
                 f.write(audio_bytes)
             audio_size_mb = len(audio_bytes) / (1024 * 1024)
-            logger.info("音频文件已保存: %s, 大小: %.2f MB", audio_id, audio_size_mb)
+            logger.info("音频文件已保存: %s, 大小: %.2f MB", new_audio_id, audio_size_mb)
             # 使用 URL_PREFIX 拼接音频 URL
-            audio_url = f"{URL_PREFIX}/api/audio/{audio_id}"
-            return jsonify(
-                {
-                    "success": True,
-                    "recognized_text": text,
-                    "answer": answer,
-                    "audio": audio_url,
-                    "audio_id": audio_id,
-                    "timings": timings,
-                    "sources": sources,
-                }
-            )
-        return jsonify(
-            {
-                "success": True,
-                "recognized_text": text,
-                "answer": answer,
-                "audio": None,
-                "audio_id": audio_id,
-                "timings": timings,
-                "sources": sources,
-            }
-        )
+            audio_url = f"{URL_PREFIX}/api/audio/{new_audio_id}"
+            
+            result["audio"] = audio_url
+            result["audio_id"] = new_audio_id # 更新为输出 audio_id
+
+        return jsonify(result)
     except Exception as e:
         logger.error("对话 API 错误: %s", e)
         return jsonify({"error": str(e)}), 500
@@ -650,6 +634,12 @@ def get_audio(audio_id):
     except Exception as e:
         logger.error("获取音频文件失败: %s", e)
         return jsonify({"error": str(e)}), 500
+
+
+# --- 图片文件端点 ---
+@app.route("/uploads/chat_images/<path:filename>")
+def serve_chat_image(filename):
+    return send_from_directory(UPLOAD_CHAT_IMAGES_DIR, filename)
 
 
 # --- 识别并查询 ---
