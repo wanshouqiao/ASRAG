@@ -1236,6 +1236,34 @@
             }
         }
 
+        // 切换音频播放状态
+        window.toggleAudio = function(audioId) {
+            const audio = document.getElementById(`audio-player-${audioId}`);
+            if (!audio) return;
+
+            // 检查全局播放器是否正在播放当前音频
+            const global = window.globalTtsAudio;
+            // 简单的判断：如果全局播放器在播放，且 src 包含 audioId
+            const isGlobalPlayingThis = global && !global.paused && global.src.indexOf(audioId) !== -1;
+
+            if (isGlobalPlayingThis) {
+                global.pause();
+            } else {
+                if (audio.paused) {
+                    // 播放前先停止其他播放
+                    if (global && !global.paused) global.pause();
+                    // 停止页面上其他 audio 元素
+                    document.querySelectorAll('audio').forEach(a => {
+                        if(a !== audio && !a.paused) a.pause();
+                    });
+                    
+                    audio.play();
+                } else {
+                    audio.pause();
+                }
+            }
+        };
+
         // 显示结果
         function displayResult(recognizedText, answer, audioData, timings, sources, audioId) {
             const resultDiv = document.createElement('div');
@@ -1252,7 +1280,7 @@
             if (audioData) {
                 audioHTML = `
                     <div style="margin-top: 15px;">
-                        <audio controls style="width: 100%; max-width: 500px;">
+                        <audio id="audio-player-${audioId}" controls style="width: 100%; max-width: 500px;">
                             <source src="${audioData}" type="audio/wav">
                             您的浏览器不支持音频播放。
                             </audio>
@@ -1297,13 +1325,15 @@
                 `;
             }
             
+            const stopBtn = audioData ? `<button id="btn-audio-${audioId}" onclick="toggleAudio('${audioId}')" style="margin-left: auto; padding: 4px 10px; font-size: 12px; background: #ff7043; color: white; border: none; border-radius: 12px; cursor: pointer; display: flex; align-items: center; gap: 4px;">🔇 停止</button>` : '';
+
             resultDiv.innerHTML = `
                 <div class="result-section">
                     <h3>用户问题</h3>
                     <div class="result-text">${recognizedText}</div>
                 </div>
                 <div class="result-section answer">
-                    <h3>AI 回答</h3>
+                    <h3>AI 回答${stopBtn}</h3>
                     <div class="result-text">${answer}</div>
                     ${sourcesHTML}
                     ${audioHTML}
@@ -1314,8 +1344,20 @@
             
             // 自动播放音频（如果存在）
             if (audioData) {
-                const manualAudio = resultDiv.querySelector('audio');
+                const manualAudio = document.getElementById(`audio-player-${audioId}`);
+                const btn = document.getElementById(`btn-audio-${audioId}`);
                 
+                const updateBtn = (playing) => {
+                    if (!btn) return;
+                    if (playing) {
+                        btn.innerHTML = '🔇 停止';
+                        btn.style.background = '#ff7043';
+                    } else {
+                        btn.innerHTML = '🔊 播放';
+                        btn.style.background = '#4CAF50';
+                    }
+                };
+
                 // 1. 配置手动播放器（用于历史记录回放）
                 if (manualAudio) {
                     manualAudio.addEventListener('play', () => {
@@ -1326,14 +1368,17 @@
                         startAssistantEq();
                         window._isAiSpeaking = true;
                         window._currentTtsAudio = manualAudio;
+                        updateBtn(true);
                     });
                     manualAudio.addEventListener('pause', () => {
                         stopAssistantEq();
                         window._isAiSpeaking = false;
+                        updateBtn(false);
                     });
                     manualAudio.addEventListener('ended', () => {
                         stopAssistantEq();
                         window._isAiSpeaking = false;
+                        updateBtn(false);
                     });
                 }
 
@@ -1350,16 +1395,19 @@
                     window.globalTtsAudio.onplay = () => {
                         startAssistantEq();
                         window._isAiSpeaking = true;
+                        updateBtn(true);
                     };
                     window.globalTtsAudio.onended = () => {
                         stopAssistantEq();
                         window._isAiSpeaking = false;
                         if (window._currentTtsAudio === window.globalTtsAudio) window._currentTtsAudio = null;
+                        updateBtn(false);
                     };
                     window.globalTtsAudio.onpause = () => {
                         stopAssistantEq();
                         window._isAiSpeaking = false;
                         if (window._currentTtsAudio === window.globalTtsAudio) window._currentTtsAudio = null;
+                        updateBtn(false);
                     };
 
                     window.globalTtsAudio.play().catch(e => {
@@ -1579,11 +1627,13 @@ async function sendRecognizedToLLM(text) {
                             
                             // 收到 ASR 文本（在线或离线）
                             lastRecognizedText = msg.text;
-                            recognizedTextDiv.textContent = msg.text;
-                            const conf = typeof msg.confidence === 'number' ? (msg.confidence * 100).toFixed(1) + '%' : '';
-                            recognitionMeta.innerHTML = `${conf ? ('置信度: ' + conf) : ''}`;
-                            recognitionResult.style.display = 'block';
-                            textInput.value = msg.text; // 同步到输入框（隐藏态）
+                            
+                            // [修改] 不再实时上屏，等待大模型判断
+                            // recognizedTextDiv.textContent = msg.text;
+                            // const conf = typeof msg.confidence === 'number' ? (msg.confidence * 100).toFixed(1) + '%' : '';
+                            // recognitionMeta.innerHTML = `${conf ? ('置信度: ' + conf) : ''}`;
+                            // recognitionResult.style.display = 'block';
+                            // textInput.value = msg.text; // 同步到输入框（隐藏态）
 
                             // 每一次识别增量都视为活跃说话，重置唤醒计时（避免过早回退）
                             if (msg.text && msg.text.trim().length > 0) {
