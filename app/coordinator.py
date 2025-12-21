@@ -13,7 +13,7 @@ import time
 import uuid
 from pathlib import Path
 
-from flask import Flask, jsonify, render_template, request, abort, send_file, send_from_directory
+from flask import Flask, jsonify, render_template, request, abort, send_file, send_from_directory, url_for
 from werkzeug.exceptions import HTTPException
 
 from app.asr_module import ASRModule
@@ -47,8 +47,8 @@ class PrefixMiddleware(object):
             environ['SCRIPT_NAME'] = self.prefix
             return self.app(environ, start_response)
         else:
-            start_response('404', [('Content-Type', 'text/plain')])
-            return ["This url does not belong to the app.".encode()]
+            # 允许不带前缀的访问，直接透传
+            return self.app(environ, start_response)
 
 app = Flask(__name__, template_folder=TEMPLATE_DIR, static_folder=STATIC_DIR)
 app.wsgi_app = PrefixMiddleware(app.wsgi_app, prefix=URL_PREFIX)
@@ -375,8 +375,8 @@ def query():
                 f.write(audio_bytes)
             audio_size_mb = len(audio_bytes) / (1024 * 1024)
             logger.info("音频文件已保存: %s, 大小: %.2f MB", new_audio_id, audio_size_mb)
-            # 使用 URL_PREFIX 拼接音频 URL
-            audio_url = f"{URL_PREFIX}/api/audio/{new_audio_id}"
+            # 使用 url_for 生成音频 URL，自动适配前缀
+            audio_url = url_for('get_audio', audio_id=new_audio_id)
             
             result["audio"] = audio_url
             result["audio_id"] = new_audio_id # 更新为输出 audio_id
@@ -432,8 +432,8 @@ def text_chat():
             audio_path = os.path.join(TEMP_AUDIO_DIR, f"{audio_id}.wav")
             with open(audio_path, "wb") as f:
                 f.write(audio_bytes)
-            # 使用 URL_PREFIX 拼接音频 URL
-            audio_url = f"{URL_PREFIX}/api/audio/{audio_id}"
+            # 使用 url_for 生成音频 URL，自动适配前缀
+            audio_url = url_for('get_audio', audio_id=audio_id)
             return jsonify(
                 {
                     "success": True,
@@ -769,7 +769,7 @@ def main():
     print("请在浏览器中打开: http://localhost:7000")
     print("按 Ctrl+C 退出程序")
     print("=" * 60 + "\n")
-    app.run(host="::", port=5000, debug=debug_mode)
+    app.run(host="::", port=7000, debug=debug_mode)
 
 
 if __name__ == "__main__":

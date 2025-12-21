@@ -1518,7 +1518,7 @@ async function sendRecognizedToLLM(text) {
         function wsUrl() {
             const scheme = location.protocol === 'https:' ? 'wss://' : 'ws://';
             // 默认后端端口 10095
-            return scheme + location.hostname + ':10095';
+            return "ws://127.0.0.1:10095";
         }
 
         function setWakeStatus(text) {
