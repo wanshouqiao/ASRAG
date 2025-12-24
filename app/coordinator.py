@@ -313,9 +313,9 @@ def query():
                     return jsonify({"error": "仅支持 jpg/jpeg/png/webp 图片"}), 400
 
                 image_bytes = image_file.read()
-                max_size = 2 * 1024 * 1024  # 2MB
+                max_size = 10 * 1024 * 1024  # 10MB
                 if len(image_bytes) > max_size:
-                    return jsonify({"error": "图片大小超出 2MB 限制"}), 400
+                    return jsonify({"error": "图片大小超出 10MB 限制"}), 400
 
                 # 保存到对话框图片目录
                 os.makedirs(UPLOAD_CHAT_IMAGES_DIR, exist_ok=True)

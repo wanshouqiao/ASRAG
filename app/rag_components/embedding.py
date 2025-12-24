@@ -36,7 +36,7 @@ class VisualizedBGEEmbeddings(Embeddings):
                 [text],
                 padding=True,
                 truncation=True,
-                max_length=512,
+                max_length=1024,
                 return_tensors="pt",
             )
             inputs = {k: v.to(device) for k, v in inputs.items()}
@@ -141,7 +141,7 @@ class VisualizedBGEEmbeddings(Embeddings):
             texts,
             padding=True,
             truncation=True,
-            max_length=512,
+            max_length=1024,
             return_tensors="pt",
         )
         inputs = {k: v.to(device) for k, v in inputs.items()}
@@ -163,7 +163,7 @@ class VisualizedBGEEmbeddings(Embeddings):
             text_batch = list(text_batch)
             
             # 分批处理文本，防止显存溢出
-            batch_size = 8  # 减小 batch size 以节省显存
+            batch_size = 4  # 减小 batch size 以节省显存
             all_text_vecs = []
             
             for i in range(0, len(text_batch), batch_size):

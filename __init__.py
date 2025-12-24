@@ -6,10 +6,11 @@
 1. 先启动 llama.cpp server：
 cd /data/AI/LlamaCPPProject/llama.cpp-master/build/bin
 ./llama-server \
-  -m /data/AI/LlamaCPPProject/llm/google_gemma-3-4b-it-Q8_0.gguf \
-  --mmproj /data/AI/LlamaCPPProject/llm/mmproj-google_gemma-3-4b-it-f16.gguf \
+  -m /data/AI/LlamaCPPProject/llm/gemma-3-12b-it-q4_0.gguf \
+  --mmproj /data/AI/LlamaCPPProject/llm/mmproj-model-f16-12B.gguf \
   -ngl -1 \
   --host 0.0.0.0 \
+  -c 8192 \
   --port 8000
 
 2. 启动funasr
