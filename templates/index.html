@@ -107,7 +107,7 @@
         }
 
         .btn-record {
-            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            background: linear-gradient(135deg, #1E88E5 0%, #42A5F5 100%);
             color: white;
         }
 
@@ -157,6 +157,10 @@
             white-space: pre-wrap;
             word-wrap: break-word;
         }
+        .result-text pre { background: #f6f8fa; padding: 10px; border-radius: 6px; overflow: auto; }
+        .result-text code { background: #f0f0f0; padding: 2px 4px; border-radius: 4px; }
+        .result-text a { color: #1E88E5; text-decoration: none; }
+        .result-text a:hover { text-decoration: underline; }
 
         .result-section.answer {
             background: linear-gradient(135deg, #e0f7fa 0%, #b2ebf2 100%);
@@ -236,6 +240,27 @@
             transition: all 0.3s;
         }
 
+        .page-actions {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 8px;
+        }
+        .page-actions .admin-link { position: static; }
+        .mode-toggle { display:flex; align-items:center; gap:8px; color:#1976d2; font-size: 0.95em; cursor: pointer; user-select: none; padding: 8px 16px; background: rgba(255, 255, 255, 0.9); border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); transition: all .3s; }
+        .mode-toggle .switch-input { display:none; }
+        .mode-toggle .switch-track { position: relative; width: 36px; height: 20px; background: #cfd8dc; border-radius: 10px; transition: background .2s ease; display: none; }
+        .mode-toggle .switch-thumb { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; background: #fff; border-radius: 50%; box-shadow: 0 1px 3px rgba(0,0,0,0.25); transition: left .2s ease; }
+        .mode-toggle:hover .switch-track, .mode-toggle:focus-within .switch-track, .mode-toggle:active .switch-track { display: inline-block; }
+        .mode-toggle .switch-input:checked + .switch-track { background: #1E88E5; }
+        .mode-toggle .switch-input:checked + .switch-track .switch-thumb { left: 18px; }
+        .kb-status { font-size: 11px; color: #666; }
+        .mode-toggle:hover { background: rgba(255,255,255,1); box-shadow: 0 4px 12px rgba(0,0,0,0.2); transform: translateY(-2px); }
+
         .admin-link:hover {
             background: rgba(255, 255, 255, 1);
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
@@ -289,6 +314,7 @@
                 padding: 6px 12px;
                 font-size: 0.85em;
             }
+            .page-actions { top: 12px; right: 12px; }
         }
 
         .image-preview img {
@@ -311,10 +337,27 @@
             background: #ff7043;
             color: white;
         }
+        .text-input-wrapper { position: relative; flex: 1; }
+        .kb-switch { position: absolute; top: 6px; right: 10px; display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-radius: 16px; background: rgba(255,255,255,0.6); border: 1px solid rgba(0,0,0,0.08); color: #555; font-size: 12px; user-select: none; cursor: pointer; }
+        .kb-switch .switch-input { display: none; }
+        .kb-switch .switch-track { position: relative; width: 36px; height: 20px; background: #cfd8dc; border-radius: 10px; transition: background .2s ease; }
+        .kb-switch .switch-thumb { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; background: #fff; border-radius: 50%; box-shadow: 0 1px 3px rgba(0,0,0,0.25); transition: left .2s ease; }
+        .kb-switch .switch-input:checked + .switch-track { background: #81c784; }
+        .kb-switch .switch-input:checked + .switch-track .switch-thumb { left: 18px; }
+        .kb-status { font-size: 11px; color: #999; }
     </style>
 </head>
 <body>
-    <a href="javascript:void(0)" onclick="window.location.href = window.API_PREFIX + '/admin'" class="admin-link">进入管理端 ▶</a>
+    <div class="page-actions">
+        <a href="javascript:void(0)" onclick="window.location.href = window.API_PREFIX + '/admin'" class="admin-link">进入管理端 ▶</a>
+        <label class="mode-toggle" title="开启表示使用知识库，关闭表示通用模型">
+            <span id="kbModeText">知识库模式</span>
+            <span id="kbModeIcon">📚</span>
+            <input type="checkbox" id="genericModelSwitch" class="switch-input" />
+            <span class="switch-track"><span class="switch-thumb"></span></span>
+            <span id="genericModelStatus" class="kb-status"></span>
+        </label>
+    </div>
     <div class="container">
         <h1>🎤 煤矿供电安全智能问答系统</h1>
         <p class="subtitle">说出您的问题，AI 将基于知识库为您解答</p>
@@ -355,21 +398,10 @@
             </div>
         </div>
 
-        <!-- 模型模式切换 -->
-        <div class="result-section" style="margin-top:15px; padding: 12px 20px;">
-            <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
-                <div style="display: flex; align-items: center; gap: 10px;">
-                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none;">
-                        <input type="checkbox" id="genericModelSwitch" style="width: 18px; height: 18px; cursor: pointer;" />
-                        <span style="font-size: 0.95em; color: #555;">通用模型模式（直接对话，不使用知识库）</span>
-                    </label>
-                </div>
-                <span id="genericModelStatus" style="font-size: 0.85em; color: #999;"></span>
-            </div>
-        </div>
-
         <div id="chatInputBar" class="result-section" style="margin-top:15px; display:flex; gap: 10px; align-items: center;">
-            <input type="text" id="textInput" placeholder="或者在这里输入文字提问..." style="flex: 1; padding: 10px; border-radius: 5px; border: 1px solid #ddd;">
+            <div class="text-input-wrapper">
+                <input type="text" id="textInput" placeholder="或者在这里输入文字提问..." style="width: 100%; padding: 10px; border-radius: 5px; border: 1px solid #ddd;">
+            </div>
             <input type="file" id="imageInput" accept="image/png,image/jpeg,image/webp" class="hidden">
             <button id="btnImage" class="btn-record" style="padding: 10px 14px; white-space: nowrap; background:#42A5F5;">📷 上传图片</button>
             <button id="btnSend" class="btn-record" style="padding: 10px 20px; background:#1E88E5;">发送</button>
@@ -503,7 +535,15 @@
         let recognizedTextDiv = document.getElementById('recognizedText');
         const genericModelSwitch = document.getElementById('genericModelSwitch');
         const genericModelStatus = document.getElementById('genericModelStatus');
+        const kbModeIcon = document.getElementById('kbModeIcon');
+        const kbModeText = document.getElementById('kbModeText');
         const recognitionMeta = document.getElementById('recognitionMeta');
+
+        function updateKbUI(){
+            const on = genericModelSwitch.checked;
+            if (kbModeText) kbModeText.textContent = on ? '知识库模式' : '通用模型';
+            if (kbModeIcon) kbModeIcon.textContent = on ? '📚' : '🧠';
+        }
 
         // ======= AI 说话动效 =======
         const assistantSpeaking = document.getElementById('assistantSpeaking');
@@ -524,7 +564,52 @@
             assistantSpeaking.style.display = 'none';
         }
         // ======= 结束：AI 说话动效 =======
-        const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10MB 限制
+        const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
+
+        function escapeHtml(str){
+            return (str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        }
+        function renderMarkdownSafe(md){
+            if(!md) return '';
+            let s = md;
+            const blocks = [];
+            s = s.replace(/```([\s\S]*?)```/g, function(_, code){
+                const id = '__CODEBLOCK_'+blocks.length+'__';
+                blocks.push('<pre><code>'+escapeHtml(code)+'</code></pre>');
+                return id;
+            });
+            s = escapeHtml(s);
+            s = s.replace(/`([^`]+?)`/g,'<code>$1</code>');
+            s = s.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
+            s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,'<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+            (function(){
+                var lines = s.split('\n');
+                var out = [];
+                for (var i=0;i<lines.length;i++){
+                    var line = lines[i];
+                    if (/^\s*[-*]\s+/.test(line)){
+                        var items=[];
+                        while(i<lines.length && /^\s*[-*]\s+/.test(lines[i])){ items.push('<li>'+lines[i].replace(/^\s*[-*]\s+/,'')+'</li>'); i++; }
+                        out.push('<ul>'+items.join('')+'</ul>');
+                        i--; continue;
+                    }
+                    if (/^\s*\d+[.)、]\s+/.test(line)){
+                        var items2=[];
+                        while(i<lines.length && /^\s*\d+[.)、]\s+/.test(lines[i])){ items2.push('<li>'+lines[i].replace(/^\s*\d+[.)、]\s+/,'')+'</li>'); i++; }
+                        out.push('<ol>'+items2.join('')+'</ol>');
+                        i--; continue;
+                    }
+                    out.push(line);
+                }
+                s = out.join('\n');
+            })();
+            s = s.replace(/^######\s+(.*)$/gm,'<h6>$1</h6>').replace(/^#####\s+(.*)$/gm,'<h5>$1</h5>').replace(/^####\s+(.*)$/gm,'<h4>$1</h4>').replace(/^###\s+(.*)$/gm,'<h3>$1</h3>').replace(/^##\s+(.*)$/gm,'<h2>$1</h2>').replace(/^#\s+(.*)$/gm,'<h1>$1</h1>');
+            s = s.replace(/^>\s?(.*)$/gm,'<blockquote>$1</blockquote>');
+            s = s.replace(/(^|\s)_(.+?)_/g,function(m,prefix,inner){ return (prefix||'')+'<em>'+inner+'</em>';});
+            s = s.replace(/(^|\s)\*(.+?)\*/g,function(m,prefix,inner){ return (prefix||'')+'<em>'+inner+'</em>';});
+            for(var i=0;i<blocks.length;i++){ s = s.replace(new RegExp('__CODEBLOCK_'+i+'__','g'), blocks[i]); }
+            return s;
+        }
 
         // 加载当前模型设置
         async function loadModelSettings() {
@@ -549,7 +634,8 @@
                 });
                 const data = await response.json();
                 if (data && data.success) {
-                    genericModelSwitch.checked = data.use_generic_model || false;
+                    genericModelSwitch.checked = !data.use_generic_model;
+                    updateKbUI();
                 }
             } catch (error) {
                 console.error('加载通用模型设置失败:', error);
@@ -558,7 +644,7 @@
 
         // 保存通用模型开关状态
         genericModelSwitch.addEventListener('change', async () => {
-            const enabled = genericModelSwitch.checked;
+            const kbOn = genericModelSwitch.checked;
             genericModelStatus.textContent = '保存中...';
             try {
                 const response = await fetch(window.API_PREFIX + '/api/generic_model', {
@@ -566,24 +652,25 @@
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ use_generic_model: enabled }),
+                    body: JSON.stringify({ use_generic_model: !kbOn }),
                     credentials: 'include'
                 });
                 const data = await response.json();
                 if (data && data.success) {
-                    genericModelStatus.textContent = enabled ? '✓ 已切换到通用模型' : '✓ 已切换到专用模型';
+                    genericModelStatus.textContent = kbOn ? '✓ 已开启知识库模式' : '✓ 已使用通用模型';
                     setTimeout(() => { genericModelStatus.textContent = ''; }, 2000);
                 } else {
                     genericModelStatus.textContent = '✗ 保存失败';
-                    genericModelSwitch.checked = !enabled; // 回退
+                    genericModelSwitch.checked = !kbOn;
                     setTimeout(() => { genericModelStatus.textContent = ''; }, 2000);
                 }
             } catch (error) {
                 console.error('保存通用模型设置失败:', error);
                 genericModelStatus.textContent = '✗ 保存出错';
-                genericModelSwitch.checked = !enabled; // 回退
+                genericModelSwitch.checked = !kbOn;
                 setTimeout(() => { genericModelStatus.textContent = ''; }, 2000);
             }
+            updateKbUI();
         });
 
         // 切换模型
@@ -1412,15 +1499,17 @@
             
             const stopBtn = audioData ? `<button id="btn-audio-${audioId}" onclick="toggleAudio('${audioId}')" style="margin-left: auto; padding: 4px 10px; font-size: 12px; background: #ff7043; color: white; border: none; border-radius: 12px; cursor: pointer; display: flex; align-items: center; gap: 4px;">🔇 停止</button>` : '';
 
+            const userQHtml = escapeHtml(recognizedText);
+            const answerHtml = renderMarkdownSafe(answer);
             resultDiv.innerHTML = `
                 <div class="result-section">
                     <h3>用户问题</h3>
-                    <div class="result-text">${recognizedText}</div>
+                    <div class="result-text">${userQHtml}</div>
                     ${imageHTML}
                 </div>
                 <div class="result-section answer">
                     <h3>AI 回答${stopBtn}</h3>
-                    <div class="result-text">${answer}</div>
+                    <div class="result-text">${answerHtml}</div>
                     ${sourcesHTML}
                     ${audioHTML}
                     ${timingsHTML}
@@ -2064,4 +2153,3 @@ async function softResetToWakeListening(reasonText){
     </script>
 </body>
 </html>
-
