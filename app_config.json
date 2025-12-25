@@ -10,5 +10,6 @@
       "model_name": "qwen2.5-7B",
       "supports_vision": false
     }
-  }
+  },
+  "use_generic_model": true
 }

@@ -4,6 +4,7 @@
 
 import base64
 import logging
+import os
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -359,3 +360,115 @@ class AnswerGenerator:
             if isinstance(content, list):
                 content = "".join([c.get("text", "") for c in content if isinstance(c, dict)])
             return content
+
+    def generate_direct(self, question: str = "", image_path: str = None) -> str:
+        """
+        直接调用大模型，使用通用提示词
+        用于通用模型模式
+        """
+        config = self.llm_config[self.current_model_type]
+        has_text = bool(question.strip())
+        has_image = bool(image_path)
+        
+        if not has_text and not has_image:
+            return "请输入文本或图片"
+        
+        # 系统提示词
+        system_prompt = """你是一个AI助手，请用中文回复用户的问题。"""
+        
+        # 如果有图片，使用多模态接口
+        if has_image:
+            if not os.path.exists(image_path):
+                return f"错误：图片路径不存在 {image_path}"
+            
+            try:
+                # 构建多模态消息
+                items = []
+                
+                # 如果有文本，先添加文本
+                if has_text:
+                    items.append({"type": "text", "text": question})
+                
+                # 添加图片
+                try:
+                    p = Path(image_path)
+                    data = p.read_bytes()
+                    if len(data) > 10 * 1024 * 1024:  # 10MB 限制
+                        return "图片过大(>10MB)"
+                    b64 = base64.b64encode(data).decode("utf-8")
+                    mime = "image/png"
+                    if image_path.lower().endswith((".jpg", ".jpeg")):
+                        mime = "image/jpeg"
+                    elif image_path.lower().endswith(".webp"):
+                        mime = "image/webp"
+                    items.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
+                except Exception as e:
+                    logger.warning("读取图片失败: %s", e)
+                    return f"读取图片失败: {e}"
+                
+                # 构建 payload，content 必须是数组
+                user_content = items if len(items) > 0 else [{"type": "text", "text": ""}]
+                
+                payload = {
+                    "model": config["model_name"],
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_content}
+                    ],
+                    "temperature": 0.7,
+                    "max_tokens": 2048,
+                }
+                
+                logger.info("直接调用大模型（多模态）...")
+                answer = self._invoke_vision(payload)
+                logger.info("回答生成完成（多模态）")
+                return answer
+            except Exception as e:
+                logger.error("多模态调用失败: %s", e)
+                # 如果多模态失败，尝试纯文本
+                if has_text:
+                    return self._invoke_direct_text(question, system_prompt)
+                return f"处理失败: {e}"
+        else:
+            # 纯文本模式
+            return self._invoke_direct_text(question, system_prompt)
+    
+    def _invoke_direct_text(self, question: str, system_prompt: str = None) -> str:
+        """直接调用大模型（纯文本，带系统提示词）"""
+        logger.info("直接调用大模型（文本）...")
+        
+        # 使用 HTTP 直接调用，以便添加 system message
+        config = self.llm_config[self.current_model_type]
+        api_base = config["api_base"].split("#")[0].rstrip("/")
+        api_key = config.get("api_key", "")
+        url = f"{api_base}/v1/chat/completions"
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": question})
+        
+        payload = {
+            "model": config["model_name"],
+            "messages": messages,
+            "temperature": 0.7,
+            "max_tokens": 2048,
+        }
+        
+        with httpx.Client(timeout=120) as client:
+            resp = client.post(url, headers=headers, json=payload)
+            resp.raise_for_status()
+            data = resp.json()
+            choices = data.get("choices", [])
+            if not choices:
+                raise ValueError("API 响应中没有 choices")
+            message = choices[0].get("message", {})
+            answer = message.get("content", "")
+            if isinstance(answer, list):
+                answer = "".join([c.get("text", "") for c in answer if isinstance(c, dict)])
+        
+        logger.info("回答生成完成（文本）")
+        return answer

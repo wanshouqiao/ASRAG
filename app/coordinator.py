@@ -335,14 +335,23 @@ def query():
         if not text and not image_path:
             return jsonify({"error": "输入文本和图片不能同时为空"}), 400
         
-        # 确保 text 不为 None（可能为空字符串）
-        text_for_rag = text if text else ""
+        # 检查是否使用通用模型模式
+        config = load_config()
+        use_generic_model = config.get("use_generic_model", False)
         
-        # 传递文字和图片给 RAG 模块处理
-        t0 = time.time()
-        answer, rag_timings, sources = rag_module.query(question=text_for_rag, image_path=image_path)
-        timings["rag_time"] = time.time() - t0
-        timings.update(rag_timings)
+        if use_generic_model:
+            # 通用模型模式：直接调用大模型，不经过RAG
+            t0 = time.time()
+            answer = rag_module.generate_direct(question=text if text else "", image_path=image_path)
+            timings["llm_generation"] = time.time() - t0
+            sources = []
+        else:
+            # RAG模式：使用知识库
+            text_for_rag = text if text else ""
+            t0 = time.time()
+            answer, rag_timings, sources = rag_module.query(question=text_for_rag, image_path=image_path)
+            timings["rag_time"] = time.time() - t0
+            timings.update(rag_timings)
         t0 = time.time()
         audio_bytes = rag_module.text_to_speech(answer)
         timings["tts_time"] = time.time() - t0
@@ -400,24 +409,36 @@ def text_chat():
         if not text:
             return jsonify({"error": "输入文本不能为空"}), 400
 
-        # 意图识别：判断是否为问题
-        if not rag_module.is_question(text):
-            logger.info(f"文本 '{text}' 被判定为非问题，停止处理")
-            return jsonify({
-                "success": True,
-                "recognized_text": text,
-                "answer": "", 
-                "audio": None,
-                "audio_id": audio_id,
-                "timings": {"total_time": time.time() - start_time},
-                "sources": [],
-                "ignored": True
-            })
+        # 检查是否使用通用模型模式
+        config = load_config()
+        use_generic_model = config.get("use_generic_model", False)
+        
+        if use_generic_model:
+            # 通用模型模式：直接调用大模型，不经过RAG和意图识别
+            t0 = time.time()
+            answer = rag_module.generate_direct(question=text)
+            timings["llm_generation"] = time.time() - t0
+            sources = []
+        else:
+            # RAG模式：使用知识库和意图识别
+            # 意图识别：判断是否为问题
+            if not rag_module.is_question(text):
+                logger.info(f"文本 '{text}' 被判定为非问题，停止处理")
+                return jsonify({
+                    "success": True,
+                    "recognized_text": text,
+                    "answer": "", 
+                    "audio": None,
+                    "audio_id": audio_id,
+                    "timings": {"total_time": time.time() - start_time},
+                    "sources": [],
+                    "ignored": True
+                })
 
-        t0 = time.time()
-        answer, rag_timings, sources = rag_module.query(question=text)
-        timings["rag_time"] = time.time() - t0
-        timings.update(rag_timings)
+            t0 = time.time()
+            answer, rag_timings, sources = rag_module.query(question=text)
+            timings["rag_time"] = time.time() - t0
+            timings.update(rag_timings)
 
         t0 = time.time()
         audio_bytes = rag_module.text_to_speech(answer)
@@ -732,6 +753,33 @@ def delete_model():
         return jsonify({"error": str(e)}), 400
     except Exception as e:
         logger.error("删除模型失败: %s", e)
+        return jsonify({"error": str(e)}), 500
+
+
+# --- 通用模型开关（用户端可访问）---
+@app.route("/api/generic_model", methods=["GET", "POST"])
+def manage_generic_model():
+    if request.method == "GET":
+        config = load_config()
+        use_generic_model = config.get("use_generic_model", False)
+        return jsonify({
+            "success": True,
+            "use_generic_model": use_generic_model,
+        })
+    try:
+        data = request.get_json()
+        use_generic_model = data.get("use_generic_model", False)
+        config = load_config()
+        config["use_generic_model"] = use_generic_model
+        save_config(config)
+        logger.info("通用模型模式已%s", "开启" if use_generic_model else "关闭")
+        return jsonify({
+            "success": True,
+            "message": f"通用模型模式已{'开启' if use_generic_model else '关闭'}",
+            "use_generic_model": use_generic_model,
+        })
+    except Exception as e:
+        logger.error("设置通用模型模式失败: %s", e)
         return jsonify({"error": str(e)}), 500
 
 

@@ -90,6 +90,10 @@ class RAGModule:
         """从配置中删除模型"""
         self.generator.remove_model(model_id)
 
+    def generate_direct(self, question: str = "", image_path: str = None) -> str:
+        """直接调用大模型，不经过RAG"""
+        return self.generator.generate_direct(question, image_path)
+
     def rebuild_vectorstore(self, documents_dir: str, images_dir: str = None):
         """从目录重建向量库"""
         all_docs: List[Document] = []
