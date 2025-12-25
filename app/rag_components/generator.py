@@ -93,13 +93,96 @@ class AnswerGenerator:
             logger.error(f"意图判断失败: {e}，将默认使用文本问答流程。")
             return "text_qa"
 
+    def test_model_connection(self, model_type: str) -> bool:
+        """测试模型连接是否可用"""
+        if model_type not in self.llm_config:
+            return False
+        try:
+            config = self.llm_config[model_type]
+            api_base = config["api_base"].split("#")[0].rstrip("/")
+            api_key = config.get("api_key", "")
+            url = f"{api_base}/v1/chat/completions"
+            headers = {"Content-Type": "application/json"}
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
+            
+            # 发送一个简单的测试请求
+            payload = {
+                "model": config["model_name"],
+                "messages": [
+                    {"role": "user", "content": "test"}
+                ],
+                "temperature": 0.0,
+                "max_tokens": 5
+            }
+            
+            with httpx.Client(timeout=10) as client:
+                resp = client.post(url, headers=headers, json=payload)
+                resp.raise_for_status()
+                data = resp.json()
+                # 检查响应格式是否正确
+                if "choices" in data and len(data["choices"]) > 0:
+                    logger.info("模型连接测试成功: %s", model_type)
+                    return True
+                else:
+                    logger.warning("模型响应格式异常: %s", model_type)
+                    return False
+        except httpx.TimeoutException:
+            logger.error("模型连接超时: %s", model_type)
+            return False
+        except httpx.HTTPStatusError as e:
+            logger.error("模型连接失败 (HTTP %d): %s", e.response.status_code, model_type)
+            return False
+        except Exception as e:
+            logger.error("模型连接测试异常: %s - %s", model_type, e)
+            return False
+
     def switch_llm(self, model_type: str):
-        """切换 LLM 模型"""
+        """切换 LLM 模型，切换前会测试连接"""
         if model_type not in self.llm_config:
             raise ValueError(f"不支持的模型类型: {model_type}")
+        
+        # 测试模型连接
+        if not self.test_model_connection(model_type):
+            raise ConnectionError(f"模型 '{model_type}' 连接失败，无法切换。请检查模型服务是否正在运行。")
+        
         logger.info("切换 LLM 到: %s (%s)", model_type, self.llm_config[model_type]["model_name"])
         self.llm = self._create_llm_instance(model_type)
         self.current_model_type = model_type
+
+    def add_model(self, model_id: str, api_base: str, api_key: str, model_name: str, supports_vision: bool = False, test_connection: bool = True):
+        """添加新模型到配置，默认会测试连接"""
+        if model_id in self.llm_config:
+            raise ValueError(f"模型 ID '{model_id}' 已存在")
+        
+        # 先添加配置（临时）
+        self.llm_config[model_id] = {
+            "api_base": api_base,
+            "api_key": api_key,
+            "model_name": model_name,
+            "supports_vision": supports_vision,
+        }
+        
+        # 如果需要测试连接
+        if test_connection:
+            if not self.test_model_connection(model_id):
+                # 连接失败，移除刚添加的配置
+                del self.llm_config[model_id]
+                raise ConnectionError(f"模型 '{model_id}' 连接失败，无法添加。请检查 API 地址和模型服务是否正在运行。")
+        
+        logger.info("已添加新模型: %s (%s)", model_id, model_name)
+
+    def remove_model(self, model_id: str):
+        """从配置中删除模型"""
+        if model_id not in self.llm_config:
+            raise ValueError(f"模型 ID '{model_id}' 不存在")
+        if model_id == "local":
+            raise ValueError("不能删除默认的 'local' 模型")
+        # 如果当前使用的是要删除的模型，需要先切换
+        if self.current_model_type == model_id:
+            raise ValueError(f"不能删除当前正在使用的模型 '{model_id}'，请先切换到其他模型")
+        del self.llm_config[model_id]
+        logger.info("已删除模型: %s", model_id)
 
     def generate_answer(self, question: str, context_docs: List[Document], query_image_path: str = None, is_vision_request: bool = False) -> str:
         """根据上下文和问题生成答案，自动处理多模态"""

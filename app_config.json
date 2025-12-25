@@ -2,5 +2,13 @@
   "last_uploaded_kb": "/home/kevin/ASRAG/uploads/documents/预设问题 1_1766480537.md",
   "model_type": "local",
   "collect_dialect_data": false,
-  "model_name": "gemma-3-12b-it-q4_0"
+  "model_name": "gemma-3-12b-it-q4_0",
+  "custom_models": {
+    "qwen2.5-7B": {
+      "api_base": "http://localhost:8001",
+      "api_key": "",
+      "model_name": "qwen2.5-7B",
+      "supports_vision": false
+    }
+  }
 }

@@ -45,10 +45,49 @@
       <div class="row">
         <label for="modelSelect">选择 LLM 模型：</label>
         <select id="modelSelect">
-          <option value="local">本地模型 (Qwen2.5-7B)</option>
-          <option value="deepseek">DeepSeek API</option>
+          <option value="gemma3-12b">Gemma3-12B</option>
+          <option value="qwen2.5-7b">Qwen2.5-7B</option>
         </select>
         <span id="modelStatus" class="muted"></span>
+      </div>
+      
+      <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #eee;">
+        <h3 style="margin: 0 0 12px; font-size: 16px; color: #444;">已配置的模型</h3>
+        <div id="modelList" style="margin-bottom: 20px;">
+          <div class="muted">正在加载...</div>
+        </div>
+      </div>
+      
+      <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #eee;">
+        <h3 style="margin: 0 0 12px; font-size: 16px; color: #444;">添加新模型</h3>
+        <div style="display: flex; flex-direction: column; gap: 10px;">
+          <div>
+            <label style="display: block; margin-bottom: 4px; color: #555; font-size: 13px;">模型 ID（唯一标识）:</label>
+            <input type="text" id="newModelId" placeholder="例如: my-custom-model" style="width: 100%; max-width: 520px; padding: 8px; border-radius: 6px; border: 1px solid #ddd; font-size: 14px;" />
+          </div>
+          <div>
+            <label style="display: block; margin-bottom: 4px; color: #555; font-size: 13px;">API 地址:</label>
+            <input type="text" id="newModelApiBase" placeholder="例如: http://localhost:8000" style="width: 100%; max-width: 520px; padding: 8px; border-radius: 6px; border: 1px solid #ddd; font-size: 14px;" />
+          </div>
+          <div>
+            <label style="display: block; margin-bottom: 4px; color: #555; font-size: 13px;">API Key（可选）:</label>
+            <input type="text" id="newModelApiKey" placeholder="留空表示无需认证" style="width: 100%; max-width: 520px; padding: 8px; border-radius: 6px; border: 1px solid #ddd; font-size: 14px;" />
+          </div>
+          <div>
+            <label style="display: block; margin-bottom: 4px; color: #555; font-size: 13px;">模型名称:</label>
+            <input type="text" id="newModelName" placeholder="例如: qwen2.5-7b-instruct" style="width: 100%; max-width: 520px; padding: 8px; border-radius: 6px; border: 1px solid #ddd; font-size: 14px;" />
+          </div>
+          <div>
+            <label style="display: flex; align-items: center; gap: 8px; color: #555; font-size: 13px;">
+              <input type="checkbox" id="newModelSupportsVision" style="width: auto;" />
+              <span>支持多模态（图片输入）</span>
+            </label>
+          </div>
+          <div style="margin-top: 8px;">
+            <button id="btnAddModel" class="primary" style="background: #2196F3;">添加模型并切换</button>
+            <span id="addModelStatus" class="muted"></span>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -158,6 +197,8 @@
     const uploadStatus = document.getElementById('uploadStatus');
     const fileList     = document.getElementById('fileList');
 
+    const modelList = document.getElementById('modelList');
+    
     async function loadModelSettings(){
       try{
         const r = await fetch(window.API_PREFIX + '/api/model', { 
@@ -165,12 +206,89 @@
           credentials: 'include'
         });
         const j = await r.json();
-        if(j && j.success && j.current_model){ modelSelect.value=j.current_model; }
+        if(j && j.success){
+          // 更新下拉列表，包含所有可用模型
+          modelSelect.innerHTML = '';
+          const models = j.available_models || [];
+          const modelsInfo = j.models_info || {};
+          const currentModel = j.current_model || '';
+          
+          models.forEach(modelId => {
+            const option = document.createElement('option');
+            option.value = modelId;
+            const info = modelsInfo[modelId] || {};
+            const displayName = info.model_name ? `${modelId} (${info.model_name})` : modelId;
+            option.textContent = displayName;
+            modelSelect.appendChild(option);
+          });
+          
+          // 如果后端返回当前模型，则使用；否则默认到第一个
+          modelSelect.value = currentModel || (models.length > 0 ? models[0] : '');
+          modelSelect.dataset.prev = modelSelect.value; // 记录上一次有效值，用于回退
+          
+          // 更新模型列表显示
+          renderModelList(models, modelsInfo, currentModel);
+        }
       }catch(e){ modelStatus.textContent='加载失败'; }
     }
+    
+    function renderModelList(models, modelsInfo, currentModel){
+      if(!models || models.length === 0){
+        modelList.innerHTML = '<div class="muted">暂无模型</div>';
+        return;
+      }
+      
+      let html = '<ul style="list-style: none; padding: 0; margin: 0;">';
+      models.forEach(modelId => {
+        const info = modelsInfo[modelId] || {};
+        const isCurrent = modelId === currentModel;
+        const isDefault = modelId === 'local';
+        const canDelete = !isDefault && !isCurrent;
+        
+        html += `<li style="display: flex; justify-content: space-between; align-items: center; padding: 10px; border-bottom: 1px solid #f0f0f0;">
+          <div style="flex: 1;">
+            <div style="font-weight: 500; color: #333;">
+              ${modelId} ${isCurrent ? '<span style="color: #4CAF50; font-size: 0.85em;">(当前使用)</span>' : ''}
+              ${isDefault ? '<span style="color: #999; font-size: 0.85em;">(默认模型)</span>' : ''}
+            </div>
+            <div style="font-size: 0.85em; color: #666; margin-top: 4px;">
+              模型名称: ${info.model_name || 'N/A'} | API: ${info.api_base || 'N/A'}
+              ${info.supports_vision ? ' | 支持多模态' : ''}
+            </div>
+          </div>
+          ${canDelete ? `<button onclick="deleteModel('${modelId}')" class="warn" style="margin-left: 10px;">删除</button>` : ''}
+        </li>`;
+      });
+      html += '</ul>';
+      modelList.innerHTML = html;
+    }
+    
+    window.deleteModel = async function(modelId){
+      if(!confirm(`确定要删除模型 "${modelId}" 吗？此操作不可恢复。`)) return;
+      
+      try{
+        const r = await fetch(window.API_PREFIX + '/api/model/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify({ model_id: modelId }),
+          credentials: 'include'
+        });
+        const j = await r.json();
+        if(j && j.success){
+          alert('模型已删除');
+          await loadModelSettings(); // 重新加载模型列表
+        } else {
+          alert('删除失败：' + (j && j.error || '未知错误'));
+        }
+      }catch(e){
+        alert('删除出错：' + e.message);
+      }
+    };
     modelSelect.addEventListener('change', async ()=>{
+      const prev = modelSelect.dataset.prev || modelSelect.defaultValue || '';
       const modelType = modelSelect.value;
       modelStatus.textContent='正在切换...';
+      modelSelect.disabled = true;
       try{
         const r= await fetch(window.API_PREFIX + '/api/model',{ 
           method:'POST', 
@@ -179,11 +297,93 @@
           credentials: 'include'
         });
         const j= await r.json();
-        modelStatus.textContent = j.success ? '✅ 已切换' : '❌ 失败';
-        if(!j.success) alert('切换失败：'+(j.error||'未知错误'));
-        setTimeout(()=>modelStatus.textContent='',2000);
-      }catch(e){ modelStatus.textContent='❌ 出错'; }
+        if (j && j.success) {
+          modelStatus.textContent = '✅ 已切换';
+          // 重新加载模型列表以确保最新
+          await loadModelSettings();
+          // 如果后端回传当前模型，优先使用后端返回值
+          if (j.current_model) modelSelect.value = j.current_model;
+          modelSelect.dataset.prev = modelSelect.value;
+        } else {
+          modelStatus.textContent = '❌ 失败';
+          alert('切换失败：'+(j && j.error||'未知错误'));
+          modelSelect.value = prev; // 回退到上一次有效值
+        }
+      }catch(e){ modelStatus.textContent='❌ 出错'; modelSelect.value = prev; }
+      finally { modelSelect.disabled = false; setTimeout(()=>modelStatus.textContent='',2000); }
     });
+
+    // 添加新模型
+    const btnAddModel = document.getElementById('btnAddModel');
+    const addModelStatus = document.getElementById('addModelStatus');
+    const newModelId = document.getElementById('newModelId');
+    const newModelApiBase = document.getElementById('newModelApiBase');
+    const newModelApiKey = document.getElementById('newModelApiKey');
+    const newModelName = document.getElementById('newModelName');
+    const newModelSupportsVision = document.getElementById('newModelSupportsVision');
+
+    btnAddModel.onclick = async ()=>{
+      const modelId = newModelId.value.trim();
+      const apiBase = newModelApiBase.value.trim();
+      const apiKey = newModelApiKey.value.trim();
+      const modelName = newModelName.value.trim();
+      const supportsVision = newModelSupportsVision.checked;
+
+      if(!modelId){
+        addModelStatus.textContent='❌ 请输入模型 ID';
+        setTimeout(()=> addModelStatus.textContent='', 3000);
+        return;
+      }
+      if(!apiBase){
+        addModelStatus.textContent='❌ 请输入 API 地址';
+        setTimeout(()=> addModelStatus.textContent='', 3000);
+        return;
+      }
+      if(!modelName){
+        addModelStatus.textContent='❌ 请输入模型名称';
+        setTimeout(()=> addModelStatus.textContent='', 3000);
+        return;
+      }
+
+      addModelStatus.textContent='正在添加...';
+      btnAddModel.disabled = true;
+      try{
+        const r = await fetch(window.API_PREFIX + '/api/model/add', {
+          method:'POST',
+          headers:{'Content-Type':'application/json', ...authHeaders()},
+          body: JSON.stringify({
+            model_id: modelId,
+            api_base: apiBase,
+            api_key: apiKey,
+            model_name: modelName,
+            supports_vision: supportsVision
+          }),
+          credentials: 'include'
+        });
+        const j = await r.json();
+        if(j && j.success){
+          addModelStatus.textContent='✅ 已添加并切换';
+          // 清空表单
+          newModelId.value = '';
+          newModelApiBase.value = '';
+          newModelApiKey.value = '';
+          newModelName.value = '';
+          newModelSupportsVision.checked = false;
+          // 重新加载模型列表
+          await loadModelSettings();
+          modelStatus.textContent = '✅ 已切换到新模型';
+          setTimeout(()=> { modelStatus.textContent=''; addModelStatus.textContent=''; }, 2000);
+        } else {
+          addModelStatus.textContent='❌ 失败：'+(j && j.error || '未知错误');
+        }
+        setTimeout(()=> addModelStatus.textContent='', 5000);
+      }catch(e){
+        addModelStatus.textContent='❌ 出错：'+e.message;
+        setTimeout(()=> addModelStatus.textContent='', 5000);
+      }finally{
+        btnAddModel.disabled = false;
+      }
+    };
 
     async function loadHotwords(){
       try{

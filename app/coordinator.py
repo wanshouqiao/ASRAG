@@ -598,11 +598,20 @@ def upload_kb():
 @require_auth
 def manage_model():
     if request.method == "GET":
+        # 返回所有模型信息，包括配置详情
+        models_info = {}
+        for model_id, config in rag_module.llm_config.items():
+            models_info[model_id] = {
+                "api_base": config.get("api_base", ""),
+                "model_name": config.get("model_name", ""),
+                "supports_vision": config.get("supports_vision", False),
+            }
         return jsonify(
             {
                 "success": True,
                 "current_model": rag_module.current_model_type,
                 "available_models": list(rag_module.llm_config.keys()),
+                "models_info": models_info,
             }
         )
     try:
@@ -610,6 +619,8 @@ def manage_model():
         model_type = data.get("model_type")
         if not model_type:
             return jsonify({"error": "模型类型不能为空"}), 400
+        
+        # 切换模型（内部会测试连接）
         rag_module.switch_llm(model_type)
         config = load_config()
         config["model_type"] = model_type
@@ -617,8 +628,110 @@ def manage_model():
         return jsonify(
             {"success": True, "message": f"已切换到模型: {model_type}", "current_model": model_type}
         )
+    except ConnectionError as e:
+        logger.error("切换模型失败（连接测试失败）: %s", e)
+        return jsonify({"error": str(e)}), 400
+    except ValueError as e:
+        logger.error("切换模型失败（参数错误）: %s", e)
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         logger.error("切换模型失败: %s", e)
+        return jsonify({"error": str(e)}), 500
+
+
+# --- 添加新模型 ---
+@app.route("/api/model/add", methods=["POST"])
+@require_auth
+def add_model():
+    try:
+        data = request.get_json()
+        model_id = data.get("model_id", "").strip()
+        api_base = data.get("api_base", "").strip()
+        api_key = data.get("api_key", "").strip()
+        model_name = data.get("model_name", "").strip()
+        supports_vision = data.get("supports_vision", False)
+        
+        if not model_id:
+            return jsonify({"error": "模型 ID 不能为空"}), 400
+        if not api_base:
+            return jsonify({"error": "API 地址不能为空"}), 400
+        if not model_name:
+            return jsonify({"error": "模型名称不能为空"}), 400
+        
+        # 添加模型（会自动测试连接）
+        rag_module.add_model(model_id, api_base, api_key, model_name, supports_vision, test_connection=True)
+        
+        # 保存到配置文件
+        config = load_config()
+        if "custom_models" not in config:
+            config["custom_models"] = {}
+        config["custom_models"][model_id] = {
+            "api_base": api_base,
+            "api_key": api_key,
+            "model_name": model_name,
+            "supports_vision": supports_vision,
+        }
+        save_config(config)
+        
+        # 自动切换到新添加的模型（switch_llm 内部会再次测试连接，但此时应该已经通过了）
+        rag_module.switch_llm(model_id)
+        config["model_type"] = model_id
+        save_config(config)
+        
+        logger.info("已添加新模型: %s (%s)", model_id, model_name)
+        return jsonify({
+            "success": True,
+            "message": f"已添加模型 '{model_id}' 并切换到该模型",
+            "current_model": model_id,
+        })
+    except ConnectionError as e:
+        logger.error("添加模型失败（连接测试失败）: %s", e)
+        return jsonify({"error": str(e)}), 400
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.error("添加模型失败: %s", e)
+        return jsonify({"error": str(e)}), 500
+
+
+# --- 删除模型 ---
+@app.route("/api/model/delete", methods=["POST"])
+@require_auth
+def delete_model():
+    try:
+        data = request.get_json()
+        model_id = data.get("model_id", "").strip()
+        
+        if not model_id:
+            return jsonify({"error": "模型 ID 不能为空"}), 400
+        
+        # 删除模型
+        rag_module.remove_model(model_id)
+        
+        # 从配置文件中删除
+        config = load_config()
+        if "custom_models" in config and model_id in config["custom_models"]:
+            del config["custom_models"][model_id]
+            save_config(config)
+        
+        # 如果删除的是当前模型，切换到默认模型
+        if config.get("model_type") == model_id:
+            config["model_type"] = "local"
+            save_config(config)
+            try:
+                rag_module.switch_llm("local")
+            except Exception as e:
+                logger.warning("切换到默认模型失败: %s", e)
+        
+        logger.info("已删除模型: %s", model_id)
+        return jsonify({
+            "success": True,
+            "message": f"已删除模型 '{model_id}'",
+        })
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.error("删除模型失败: %s", e)
         return jsonify({"error": str(e)}), 500
 
 
@@ -750,12 +863,30 @@ def main():
                 visual_weight_path="/data/AI/LlamaCPPProject/embedding/bge-visualized/Visualized_m3.pth",
                 base_dir=ROOT_DIR,
             )
+            
+            # 加载保存的自定义模型（启动时不测试连接，只是加载配置）
+            custom_models = config.get("custom_models", {})
+            for model_id, model_config in custom_models.items():
+                try:
+                    rag_module.add_model(
+                        model_id=model_id,
+                        api_base=model_config.get("api_base", ""),
+                        api_key=model_config.get("api_key", ""),
+                        model_name=model_config.get("model_name", ""),
+                        supports_vision=model_config.get("supports_vision", False),
+                        test_connection=False,  # 启动时不测试连接，避免删除不通的模型
+                    )
+                    logger.info("已加载自定义模型配置: %s", model_id)
+                except Exception as e:
+                    logger.warning("加载自定义模型 %s 失败: %s", model_id, e)
+            
+            # 切换到保存的模型（切换时会测试连接，如果失败则使用默认配置）
             if saved_model_type and saved_model_type != "local":
                 try:
                     rag_module.switch_llm(saved_model_type)
                     logger.info("已恢复模型配置: %s", saved_model_type)
                 except Exception as e:
-                    logger.warning("恢复模型配置失败: %s，使用默认配置", e)
+                    logger.warning("恢复模型配置失败（模型可能未运行）: %s，使用默认配置", e)
         except Exception as e:
             logger.exception("初始化失败: %s", e)
             sys.exit(1)

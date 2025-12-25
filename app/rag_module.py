@@ -82,6 +82,14 @@ class RAGModule:
         """切换 LLM 模型"""
         self.generator.switch_llm(model_type)
 
+    def add_model(self, model_id: str, api_base: str, api_key: str, model_name: str, supports_vision: bool = False, test_connection: bool = True):
+        """添加新模型到配置"""
+        self.generator.add_model(model_id, api_base, api_key, model_name, supports_vision, test_connection)
+
+    def remove_model(self, model_id: str):
+        """从配置中删除模型"""
+        self.generator.remove_model(model_id)
+
     def rebuild_vectorstore(self, documents_dir: str, images_dir: str = None):
         """从目录重建向量库"""
         all_docs: List[Document] = []
